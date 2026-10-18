@@ -29,6 +29,11 @@
 //  dragged to (`simulateLocation`), on the route or off it, so going off
 //  route and rerouting can be tried too.
 //
+//  Replay (`replay`): a recorded walk (TripLog) instead of the GPS and the
+//  step counter, in real time, starting on the walk's own first route.
+//  Everything else works as on the real walk it was, so a change to the
+//  guidance can be tried on it. A real walk is recorded (`recorder`).
+//
 
 import Combine
 import CoreLocation
@@ -48,7 +53,9 @@ final class RouteNavigator: NSObject, ObservableObject {
 
     @Published private(set) var status: Status = .locating
     /// The signal that fits right now. Nil until there is a route.
-    @Published private(set) var pattern: Pattern?
+    @Published private(set) var pattern: Pattern? {
+        didSet { if pattern != oldValue { recorder?.pattern(pattern) } }
+    }
     /// Metres to the next turn, or to the destination when there are no more turns.
     @Published private(set) var distanceToNext: Double = 0
     /// Metres left along the route.
@@ -212,9 +219,16 @@ final class RouteNavigator: NSObject, ObservableObject {
     private var pendingPattern: Pattern?
     private var pendingTask: Task<Void, Never>?
 
-    init(destination: CLLocationCoordinate2D, simulation: Simulation? = nil) {
+    /// A recorded walk played back in place of the GPS and the steps.
+    let replay: TripReplay?
+    private var isReplay: Bool { replay != nil }
+    /// Writes down a real walk, if it is being recorded.
+    var recorder: TripRecorder?
+
+    init(destination: CLLocationCoordinate2D, simulation: Simulation? = nil, replay: TripReplay? = nil) {
         self.destination = destination
         self.simulation = simulation
+        self.replay = replay
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
@@ -226,6 +240,14 @@ final class RouteNavigator: NSObject, ObservableObject {
     }
 
     func start() {
+        if let replay {
+            replay.onFix = { [weak self] in self?.handleGPS($0) }
+            replay.onSteps = { [weak self] in self?.handleSteps(distance: $0, pace: $1, at: .now) }
+            replay.onStepEvent = { [weak self] in self?.handleStepEvent(paused: $0) }
+            replay.start()
+            startTimer()
+            return
+        }
         switch locationManager.authorizationStatus {
         case .notDetermined:
             locationManager.requestWhenInUseAuthorization()
@@ -240,6 +262,10 @@ final class RouteNavigator: NSObject, ObservableObject {
         }
         locationManager.startUpdatingLocation()
         if !isSimulated { startStepCounter() }
+        startTimer()
+    }
+
+    private func startTimer() {
         lastGoodFix = .now
         lastUsableFix = .now
         signalTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -267,20 +293,23 @@ final class RouteNavigator: NSObject, ObservableObject {
             pedometer.startEventUpdates { [weak self] event, _ in
                 guard let event else { return }
                 let paused = event.type == .pause
-                Task { @MainActor in
-                    guard let self else { return }
-                    if paused {
-                        self.stepSpeed = (0, .now)
-                    } else if let speed = self.stepSpeed, speed.value == 0 {
-                        // Walking again: about the usual pace until the counter says.
-                        self.stepSpeed = (self.walkingSpeed, .now)
-                    }
-                }
+                Task { @MainActor in self?.handleStepEvent(paused: paused) }
             }
         }
     }
 
+    private func handleStepEvent(paused: Bool) {
+        recorder?.stepEvent(paused: paused)
+        if paused {
+            stepSpeed = (0, .now)
+        } else if let speed = stepSpeed, speed.value == 0 {
+            // Walking again: about the usual pace until the counter says.
+            stepSpeed = (walkingSpeed, .now)
+        }
+    }
+
     private func handleSteps(distance: Double?, pace: Double?, at: Date) {
+        recorder?.steps(distance: distance, pace: pace)
         var speed: Double?
         if let pace, pace > 0 {
             speed = 1 / pace
@@ -303,12 +332,13 @@ final class RouteNavigator: NSObject, ObservableObject {
     /// metres, far too rough to find a turn by. (A simulated walk only needs
     /// the start, so it does without.)
     private var needsPreciseLocation: Bool {
-        !isSimulated && locationManager.accuracyAuthorization == .reducedAccuracy
+        !isSimulated && !isReplay && locationManager.accuracyAuthorization == .reducedAccuracy
     }
     private static let preciseLocationMessage =
         "Precise Location is off for Tandem. Turn it on in Settings, Privacy, Location Services, Tandem."
 
     func stop() {
+        replay?.stop()
         locationManager.stopUpdatingLocation()
         pedometer.stopUpdates()
         pedometer.stopEventUpdates()
@@ -329,7 +359,8 @@ final class RouteNavigator: NSObject, ObservableObject {
         announcedTurn = nil
         // Find the spot on the route afresh, anywhere along it.
         lastAlong = nil
-        guard !isSimulated else { return }
+        recorder?.event("recalibrate")
+        guard !isSimulated, !isReplay else { return }
         locationManager.stopUpdatingLocation()
         lastGoodFix = .now
         locationManager.startUpdatingLocation()
@@ -390,7 +421,26 @@ final class RouteNavigator: NSObject, ObservableObject {
     /// it is where the route starts.
     private func handleGPS(_ location: CLLocation) {
         if isSimulated, route != nil || isRerouting { return }
+        recorder?.fix(location)
         handle(location)
+        if route != nil { recordState(isCoasting: false) }
+    }
+
+    /// Where the navigator has the user now, and what it makes of it.
+    private func recordState(isCoasting: Bool) {
+        guard let recorder else { return }
+        var fields: [String: Any] = [
+            "remaining": remaining, "toNext": distanceToNext,
+            "routePattern": routePattern?.rawValue ?? "none", "pattern": pattern?.rawValue ?? "none",
+            "wrongWay": wrongWayCount, "offRoute": offRouteCount, "coasting": isCoasting,
+            "signalLost": signalIsLost,
+        ]
+        if let lastAlong { fields["along"] = lastAlong }
+        if let bearingAhead { fields["bearingAhead"] = bearingAhead }
+        if let heading { fields["heading"] = heading }
+        if let stepSpeed = currentStepSpeed { fields["stepSpeed"] = stepSpeed }
+        if let nextTurn { fields["nextTurnAlong"] = nextTurn.along }
+        recorder.state(fields)
     }
 
     /// `isCoasting`: not a fix, but where the steps have carried the user
@@ -598,11 +648,13 @@ final class RouteNavigator: NSObject, ObservableObject {
                           verticalAccuracy: -1, course: route.bearing(at: along), courseAccuracy: -1,
                           speed: speed, speedAccuracy: -1, timestamp: .now),
                isCoasting: true)
+        recordState(isCoasting: true)
     }
 
     private func checkSignal() {
         guard status == .guiding, pattern != .arrived, !isSimulated else { return }
         if Date.now.timeIntervalSince(lastGoodFix) > signalTimeout {
+            if !signalIsLost { recorder?.event("signalLost") }
             signalIsLost = true
             refreshPattern()
         }
@@ -692,7 +744,36 @@ final class RouteNavigator: NSObject, ObservableObject {
         fetchRoute(from: coordinate)
     }
 
+    /// A new route (the first or a reroute): the user's spot on it is found afresh.
+    private func install(_ newRoute: Route, line: MKPolyline) {
+        let isFirst = route == nil
+        route = newRoute
+        recorder?.route(newRoute.points, turns: newRoute.turns, reason: isFirst ? "first" : "reroute")
+        lastAlong = nil
+        routeLine = line
+        announcedTurn = nil
+        wrongWayCount = 0
+        offRouteCount = 0
+        status = .guiding
+        if isSimulated { locationManager.stopUpdatingLocation() }
+        // From here on, only the Forward and Back buttons (or the
+        // map) move the user: from the start. A reroute while
+        // dragging carries on from where the map put them.
+        if simulation == .walk || (isSimulated && isFirst) {
+            simulatedAlong = 0
+            placeSimulatedUser(on: newRoute, backwards: false, moving: false)
+        } else if let lastLocation {
+            handle(lastLocation)
+        }
+    }
+
     private func fetchRoute(from start: CLLocationCoordinate2D) {
+        // Replaying: the walk's own first route, so it starts as it was.
+        if let recorded = replay?.firstRoute, route == nil, recorded.points.count > 1 {
+            install(Route(points: recorded.points, turns: recorded.turns),
+                    line: MKPolyline(coordinates: recorded.points, count: recorded.points.count))
+            return
+        }
         isRerouting = true
         if route == nil { status = .routing }
 
@@ -706,24 +787,7 @@ final class RouteNavigator: NSObject, ObservableObject {
                 guard let self else { return }
                 self.isRerouting = false
                 if let mkRoute = response?.routes.first {
-                    let isFirst = self.route == nil
-                    self.route = Route(mkRoute)
-                    self.lastAlong = nil
-                    self.routeLine = mkRoute.polyline
-                    self.announcedTurn = nil
-                    self.wrongWayCount = 0
-                    self.offRouteCount = 0
-                    self.status = .guiding
-                    if self.isSimulated { self.locationManager.stopUpdatingLocation() }
-                    // From here on, only the Forward and Back buttons (or the
-                    // map) move the user: from the start. A reroute while
-                    // dragging carries on from where the map put them.
-                    if let route = self.route, self.simulation == .walk || (self.isSimulated && isFirst) {
-                        self.simulatedAlong = 0
-                        self.placeSimulatedUser(on: route, backwards: false, moving: false)
-                    } else if let lastLocation = self.lastLocation {
-                        self.handle(lastLocation)
-                    }
+                    self.install(Route(mkRoute), line: mkRoute.polyline)
                 } else if self.route == nil {
                     // A failed reroute keeps the old route; a failed first route ends here.
                     self.status = .failed(error?.localizedDescription
@@ -744,6 +808,8 @@ extension RouteNavigator: CLLocationManagerDelegate {
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
         Task { @MainActor in
+            // Replaying doesn't use the GPS.
+            guard !self.isReplay else { return }
             if status == .denied || status == .restricted {
                 self.status = .failed("Location is off for Tandem. Turn it on in Settings, Privacy, Location Services.")
                 self.stop()
@@ -790,6 +856,17 @@ private struct Route {
 
     /// Bends sharper than this count as a turn (degrees).
     private static let turnAngle: Double = 35
+
+    /// A recorded route (TripReplay), as it was.
+    init(points: [CLLocationCoordinate2D], turns: [Turn]) {
+        self.points = points
+        var distances: [Double] = [0]
+        for i in 1..<max(1, points.count) {
+            distances.append(distances[i - 1] + distance(points[i - 1], points[i]))
+        }
+        cumulative = distances
+        self.turns = turns
+    }
 
     init(_ route: MKRoute) {
         let polyline = route.polyline

@@ -10,8 +10,9 @@
 //  "Feel the signals again" works and
 //  opens the tutorial. "Simulate a walk to Centraal" opens the navigation
 //  screen with buttons to walk the route by hand; "Simulate by dragging the
-//  map" opens it with a map to drag the user around on. Appearance doesn't
-//  lead anywhere yet.
+//  map" opens it with a map to drag the user around on. "Recorded walks"
+//  lists the real walks recorded on this phone, to share or replay.
+//  Appearance doesn't lead anywhere yet.
 //
 
 import SwiftUI
@@ -69,6 +70,14 @@ struct SettingsView: View {
             simulationButton(.drag, title: "Simulate by dragging the map", systemImage: "hand.draw",
                              hint: "Follows the route to Centraal, with you at the pin in the middle of a map you drag around.")
 
+            NavigationLink {
+                RecordedWalksView(connectivity: connectivity, phoneHaptics: phoneHaptics)
+            } label: {
+                linkLabel("Recorded walks", systemImage: "point.bottomleft.forward.to.point.topright.scurvepath")
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Your recorded walks, to share or replay.")
+
             Spacer(minLength: 0)
         }
         .fullScreenCover(item: $simulation) { simulation in
@@ -89,6 +98,14 @@ struct SettingsView: View {
         Button {
             simulation = mode
         } label: {
+            linkLabel(title, systemImage: systemImage)
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(hint)
+    }
+
+    /// A row that opens something: its symbol, title and a chevron, on glass.
+    private func linkLabel(_ title: String, systemImage: String) -> some View {
             HStack(spacing: 14) {
                 Image(systemName: systemImage)
                     .font(.system(size: 20, weight: .semibold))
@@ -106,9 +123,6 @@ struct SettingsView: View {
             .padding(.vertical, 20)
             .glassButtonBackground(tint: nil, fallback: Palette.card,
                                    in: RoundedRectangle(cornerRadius: 24))
-        }
-        .buttonStyle(.plain)
-        .accessibilityHint(hint)
     }
 
     private var settingsList: some View {

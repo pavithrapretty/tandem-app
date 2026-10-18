@@ -65,6 +65,9 @@ final class HeadingTracker: NSObject, ObservableObject, CLLocationManagerDelegat
     /// Where the cone points on screen: degrees clockwise from the top of the map.
     var facing: Double? { degrees.map { $0 - mapHeading } }
 
+    /// Writes down a real walk's compass, if it is being recorded.
+    var recorder: TripRecorder?
+
     private let manager = CLLocationManager()
     private let motion = CMMotionManager()
     /// False when Core Motion can't give a heading on this phone, or failed:
@@ -231,6 +234,16 @@ final class HeadingTracker: NSObject, ObservableObject, CLLocationManagerDelegat
         // Every degree, so the cone keeps up, but not every tiny tremble.
         let unwrapped = Self.unwrap(value, after: degrees)
         if abs(unwrapped - degrees) >= 1 { self.degrees = unwrapped }
+        updateSteady(unwrapped)
+        recorder?.heading(live: unwrapped, steady: steadyDegrees, north: north)
+    }
+
+    /// Replaying a recorded walk: the way the phone pointed then, in place of
+    /// the sensors (which stay off). The steady way is worked out afresh.
+    func play(_ value: Double) {
+        isForgotten = false
+        let unwrapped = degrees.map { Self.unwrap(value, after: $0) } ?? value
+        degrees = unwrapped
         updateSteady(unwrapped)
     }
 
@@ -420,6 +433,7 @@ final class HeadingTracker: NSObject, ObservableObject, CLLocationManagerDelegat
         Task { @MainActor in
             guard !self.isForgotten else { return }
             self.accuracy = accuracy
+            self.recorder?.compass(heading: value, accuracy: accuracy, field: field)
             guard self.usesMotion else {
                 guard valid else { self.degrees = nil; return }
                 let degrees = self.degrees.map { Self.unwrap(value, after: $0) } ?? value

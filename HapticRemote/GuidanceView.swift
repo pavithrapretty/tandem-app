@@ -186,16 +186,26 @@ struct GuidanceView: View {
     /// route, or dragging the map does. Nil on a real walk.
     let simulation: RouteNavigator.Simulation?
     private var isSimulated: Bool { simulation != nil }
+    /// A recorded walk played back in place of the GPS, the steps and the
+    /// compass (Settings, Recorded walks). Nil on a real walk.
+    let replay: TripReplay?
 
     init(destination: Destination = .centraal, simulation: RouteNavigator.Simulation? = nil,
+         replay: TripReplay? = nil,
          connectivity: ConnectivityManager, phoneHaptics: PhoneHapticPlayer) {
         self.destination = destination
         self.simulation = simulation
+        self.replay = replay
         self.connectivity = connectivity
         self.phoneHaptics = phoneHaptics
         _navigator = StateObject(wrappedValue: RouteNavigator(destination: destination.coordinate,
-                                                              simulation: simulation))
+                                                              simulation: simulation, replay: replay))
     }
+
+    /// A real walk on the real sensors: recorded, if that is on in Settings.
+    private var isRealWalk: Bool { !isSimulated && replay == nil }
+    @AppStorage(TripRecorder.settingKey) private var recordsWalks = true
+    @State private var recorder: TripRecorder?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -318,7 +328,7 @@ struct GuidanceView: View {
         }
         // The direction of travel keeps the compass's north right.
         .onChange(of: navigator.lastLocation) { _, location in
-            if let location, !isSimulated { heading.walked(location) }
+            if let location, isRealWalk { heading.walked(location) }
         }
         .onChange(of: simulationUsesCompass) { _, on in
             if on { heading.start() } else { heading.stopAndForget() }
@@ -327,8 +337,17 @@ struct GuidanceView: View {
             voice.voiceSession()
             navigator.setLookAhead(lookAhead)
             navigator.setRerouteDistance(rerouteDistance)
+            if isRealWalk, recordsWalks, recorder == nil,
+               let recorder = TripRecorder(destination: destination, lookAhead: lookAhead,
+                                           rerouteDistance: rerouteDistance) {
+                self.recorder = recorder
+                navigator.recorder = recorder
+                heading.recorder = recorder
+            }
+            // Replaying: the walk's compass, not this phone's.
+            replay?.onHeading = { [heading] in heading.play($0) }
             navigator.start()
-            if !isSimulated || simulationUsesCompass { heading.start() }
+            if isRealWalk || (isSimulated && simulationUsesCompass) { heading.start() }
             // The compass picks the direction signals; not while it is being
             // calibrated, when the phone is waved about.
             headingFeed = heading.$degrees.combineLatest(heading.$isCalibrating)
@@ -342,6 +361,8 @@ struct GuidanceView: View {
             calibration?.cancel()
             navigator.stop()
             heading.stop()
+            recorder?.finish(navigator.pattern == .arrived ? "arrived" : "closed")
+            recorder = nil
             UIApplication.shared.isIdleTimerDisabled = false
         }
     }
@@ -461,6 +482,10 @@ struct GuidanceView: View {
 
             Spacer(minLength: 0)
 
+            if let replay, remotePattern == nil {
+                ReplayBar(replay: replay)
+            }
+
             if showsSimulationControls {
                 if simulation == .drag {
                     DragControls(usesCompass: $simulationUsesCompass)
@@ -578,7 +603,7 @@ struct GuidanceView: View {
             .glassButtonBackground(tint: nil, fallback: Palette.card, in: Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(isCalibrating || remotePattern != nil)
+        .disabled(isCalibrating || remotePattern != nil || replay != nil)
         .accessibilityLabel(isCalibrating ? "Calibrating" : "Calibrate compass and location")
         .accessibilityHint("Then move the phone in a figure eight")
     }
@@ -722,7 +747,7 @@ struct GuidanceView: View {
                 toolbarButton(icon: Image(systemName: "location.north.circle"),
                               title: isCalibrating ? "Calibrating" : "Calibrate", compact: true,
                               action: recalibrate)
-                    .disabled(isCalibrating || remotePattern != nil)
+                    .disabled(isCalibrating || remotePattern != nil || replay != nil)
                     .accessibilityLabel(isCalibrating ? "Calibrating" : "Calibrate compass and location")
                     .accessibilityHint("Then move the phone in a figure eight")
             }
@@ -1063,6 +1088,47 @@ private struct WalkButton: View {
 
     private func step() {
         navigator.simulateWalk(by: direction * stepLength)
+    }
+}
+
+/// Replaying a recorded walk: how far it has got, and a pause button.
+private struct ReplayBar: View {
+    @ObservedObject var replay: TripReplay
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button {
+                replay.togglePause()
+            } label: {
+                Image(systemName: replay.isPaused ? "play.fill" : "pause.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Palette.text)
+                    .frame(width: 44, height: 44)
+                    .glassButtonBackground(tint: nil, fallback: Palette.card, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(replay.isFinished)
+            .accessibilityLabel(replay.isPaused ? "Play" : "Pause")
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(replay.isFinished ? "Replay finished" : "Replaying recorded walk")
+                    .font(.atkinson(14, .bold, relativeTo: .footnote))
+                    .foregroundStyle(Palette.text)
+                ProgressView(value: min(replay.elapsed, replay.duration), total: max(replay.duration, 1))
+                    .tint(Palette.accent)
+            }
+
+            Text("\(Self.time(replay.elapsed)) / \(Self.time(replay.duration))")
+                .font(.atkinson(14, .bold, relativeTo: .footnote))
+                .monospacedDigit()
+                .foregroundStyle(Palette.secondaryText)
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    static func time(_ seconds: Double) -> String {
+        let total = Int(seconds)
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }
 
