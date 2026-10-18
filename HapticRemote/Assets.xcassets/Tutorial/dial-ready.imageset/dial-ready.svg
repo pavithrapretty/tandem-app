@@ -1,0 +1,11 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="170" height="170" viewBox="0 0 170 170" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Direction dial">
+<circle id="Ellipse" cx="85" cy="85" r="85" fill="#4ADE80" fill-opacity="0.12"/>
+<circle id="Ellipse_2" cx="85" cy="85" r="79" stroke="#4ADE80" stroke-opacity="0.55" stroke-width="2"/>
+<circle id="Ellipse_3" cx="85" cy="85" r="82" stroke="#4ADE80" stroke-opacity="0.25" stroke-width="2"/>
+<circle id="Ellipse_4" cx="85" cy="85" r="60" fill="#4ADE80"/>
+<g id="Icon / check">
+<path id="Vector" d="M67.5 85L80 97.5L105 72.5" stroke="#0B0C0F" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+</g>
+</svg>

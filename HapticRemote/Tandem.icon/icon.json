@@ -1,0 +1,45 @@
+{
+  "fill" : {
+    "automatic-gradient" : "srgb:0.76863,0.70980,0.99216,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : {
+                "solid" : "srgb:0.76863,0.70980,0.99216,1.00000"
+              }
+            }
+          ],
+          "image-name" : "Vector (Stroke).svg",
+          "name" : "Vector (Stroke)",
+          "position" : {
+            "scale" : 2.66,
+            "translation-in-points" : [
+              45,
+              0.6201158249999708
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.56
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.49
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

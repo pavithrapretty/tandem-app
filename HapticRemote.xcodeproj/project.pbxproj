@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		F2B1AD81307E30E3006E953E /* HapticRemote Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = F2B1AD80307E30E3006E953E /* HapticRemote Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		F2C0FFEE0000000000000001 /* Pulsar in Frameworks */ = {isa = PBXBuildFile; productRef = F2C0FFEE0000000000000002 /* Pulsar */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,6 +70,16 @@
 		F2B1AD99307E30E4006E953E /* HapticRemote Watch AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "HapticRemote Watch AppUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		F2B1ADF1307E30E4006E953E /* Exceptions for "HapticRemote Watch App" folder in "HapticRemote Watch App" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = F2B1AD7F307E30E3006E953E /* HapticRemote Watch App */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		F2B1AD61307E30E1006E953E /* HapticRemote */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
@@ -87,6 +98,9 @@
 		};
 		F2B1AD84307E30E3006E953E /* HapticRemote Watch App */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				F2B1ADF1307E30E4006E953E /* Exceptions for "HapticRemote Watch App" folder in "HapticRemote Watch App" target */,
+			);
 			path = "HapticRemote Watch App";
 			sourceTree = "<group>";
 		};
@@ -100,12 +114,18 @@
 			path = "HapticRemote Watch AppUITests";
 			sourceTree = "<group>";
 		};
+		F2B1ADF0307E30E4006E953E /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		F2B1AD5C307E30E1006E953E /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				F2C0FFEE0000000000000001 /* Pulsar in Frameworks */,
 			);
 		};
 		F2B1AD69307E30E3006E953E /* Frameworks */ = {
@@ -145,6 +165,7 @@
 				F2B1AD84307E30E3006E953E /* HapticRemote Watch App */,
 				F2B1AD92307E30E4006E953E /* HapticRemote Watch AppTests */,
 				F2B1AD9C307E30E4006E953E /* HapticRemote Watch AppUITests */,
+				F2B1ADF0307E30E4006E953E /* Shared */,
 				F2B1AD60307E30E1006E953E /* Products */,
 			);
 			sourceTree = "<group>";
@@ -181,8 +202,12 @@
 			);
 			fileSystemSynchronizedGroups = (
 				F2B1AD61307E30E1006E953E /* HapticRemote */,
+				F2B1ADF0307E30E4006E953E /* Shared */,
 			);
 			name = HapticRemote;
+			packageProductDependencies = (
+				F2C0FFEE0000000000000002 /* Pulsar */,
+			);
 			productName = HapticRemote;
 			productReference = F2B1AD5F307E30E1006E953E /* HapticRemote.app */;
 			productType = "com.apple.product-type.application";
@@ -241,6 +266,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				F2B1AD84307E30E3006E953E /* HapticRemote Watch App */,
+				F2B1ADF0307E30E4006E953E /* Shared */,
 			);
 			name = "HapticRemote Watch App";
 			productName = "HapticRemote Watch App";
@@ -332,6 +358,9 @@
 			);
 			mainGroup = F2B1AD56307E30E1006E953E;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				F2C0FFEE0000000000000003 /* XCRemoteSwiftPackageReference "pulsar-ios" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = F2B1AD60307E30E1006E953E /* Products */;
 			projectDirPath = "";
@@ -559,13 +588,15 @@
 		F2B1ADA2307E30E4006E953E /* Debug configuration for PBXNativeTarget "HapticRemote Watch App" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Tandem;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E2Z5HAA54D;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = HapticRemote;
+				INFOPLIST_FILE = "HapticRemote Watch App/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Tandem;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.nejcprezelj.HapticRemote;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -584,20 +615,22 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 4;
-				WATCHOS_DEPLOYMENT_TARGET = 27.0;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
 			};
 			name = Debug;
 		};
 		F2B1ADA3307E30E4006E953E /* Release configuration for PBXNativeTarget "HapticRemote Watch App" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Tandem;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E2Z5HAA54D;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = HapticRemote;
+				INFOPLIST_FILE = "HapticRemote Watch App/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Tandem;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.nejcprezelj.HapticRemote;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -617,26 +650,31 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 4;
 				VALIDATE_PRODUCT = YES;
-				WATCHOS_DEPLOYMENT_TARGET = 27.0;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
 			};
 			name = Release;
 		};
 		F2B1ADA6307E30E4006E953E /* Debug configuration for PBXNativeTarget "HapticRemote" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Tandem;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E2Z5HAA54D;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = HapticRemote;
+				INFOPLIST_KEY_CFBundleDisplayName = Tandem;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Tandem shows where you are on the map, next to the stop you are walking to.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Tandem listens when you say where you want to go.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Tandem counts your steps to know how far along the route you are, between GPS updates.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Tandem turns what you say into a place to walk to.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -658,19 +696,24 @@
 		F2B1ADA7307E30E4006E953E /* Release configuration for PBXNativeTarget "HapticRemote" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Tandem;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E2Z5HAA54D;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = HapticRemote;
+				INFOPLIST_KEY_CFBundleDisplayName = Tandem;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Tandem shows where you are on the map, next to the stop you are walking to.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Tandem listens when you say where you want to go.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Tandem counts your steps to know how far along the route you are, between GPS updates.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Tandem turns what you say into a place to walk to.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -696,8 +739,9 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E2Z5HAA54D;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nejcprezelj.HapticRemoteTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -718,8 +762,9 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E2Z5HAA54D;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nejcprezelj.HapticRemoteTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -740,8 +785,9 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E2Z5HAA54D;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nejcprezelj.HapticRemoteUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -761,8 +807,9 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E2Z5HAA54D;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nejcprezelj.HapticRemoteUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -784,6 +831,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E2Z5HAA54D;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.nejcprezelj.HapticRemote-Watch-AppTests";
@@ -796,7 +844,7 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 4;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HapticRemote Watch App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/HapticRemote Watch App";
-				WATCHOS_DEPLOYMENT_TARGET = 27.0;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
 			};
 			name = Debug;
 		};
@@ -806,6 +854,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E2Z5HAA54D;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.nejcprezelj.HapticRemote-Watch-AppTests";
@@ -819,7 +868,7 @@
 				TARGETED_DEVICE_FAMILY = 4;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HapticRemote Watch App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/HapticRemote Watch App";
 				VALIDATE_PRODUCT = YES;
-				WATCHOS_DEPLOYMENT_TARGET = 27.0;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
 			};
 			name = Release;
 		};
@@ -828,6 +877,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E2Z5HAA54D;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.nejcprezelj.HapticRemote-Watch-AppUITests";
@@ -840,7 +890,7 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 4;
 				TEST_TARGET_NAME = "HapticRemote Watch App";
-				WATCHOS_DEPLOYMENT_TARGET = 27.0;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
 			};
 			name = Debug;
 		};
@@ -849,6 +899,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E2Z5HAA54D;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.nejcprezelj.HapticRemote-Watch-AppUITests";
@@ -862,7 +913,7 @@
 				TARGETED_DEVICE_FAMILY = 4;
 				TEST_TARGET_NAME = "HapticRemote Watch App";
 				VALIDATE_PRODUCT = YES;
-				WATCHOS_DEPLOYMENT_TARGET = 27.0;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
 			};
 			name = Release;
 		};
@@ -926,6 +977,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		F2C0FFEE0000000000000003 /* XCRemoteSwiftPackageReference "pulsar-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/software-mansion-labs/pulsar-ios";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.4.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		F2C0FFEE0000000000000002 /* Pulsar */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F2C0FFEE0000000000000003 /* XCRemoteSwiftPackageReference "pulsar-ios" */;
+			productName = Pulsar;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = F2B1AD57307E30E1006E953E /* Project object */;
 	validationLevel = 1;

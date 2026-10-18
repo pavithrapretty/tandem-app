@@ -1,0 +1,14 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="190" height="190" viewBox="0 0 190 190" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Success" clip-path="url(#clip0_0_4)">
+<circle id="Ellipse" cx="95" cy="95" r="95" fill="#4ADE80" fill-opacity="0.12"/>
+<circle id="Ellipse_2" cx="95" cy="95" r="66" fill="#4ADE80"/>
+<g id="Icon / check">
+<path id="Vector" d="M74 95L89 110L119 80" stroke="#0B0C0F" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+</g>
+<defs>
+<clipPath id="clip0_0_4">
+<rect width="190" height="190" fill="white"/>
+</clipPath>
+</defs>
+</svg>
