@@ -189,6 +189,16 @@ struct GuidanceView: View {
     /// A recorded walk played back in place of the GPS, the steps and the
     /// compass (Settings, Recorded walks). Nil on a real walk.
     let replay: TripReplay?
+    /// Going to a stop, what can be caught there has been said (once a walk).
+    @State private var saidDepartures = false
+    /// What can be caught at the stop, shown in the next step card's place
+    /// while it is being said.
+    @State private var catchable: Catchable?
+    struct Catchable {
+        let minutesAway: Int
+        /// Each with the minutes to wait once there.
+        let departures: [(departure: Transit.Departure, wait: Int)]
+    }
 
     init(destination: Destination = .centraal, simulation: RouteNavigator.Simulation? = nil,
          replay: TripReplay? = nil,
@@ -215,14 +225,21 @@ struct GuidanceView: View {
     /// Set once the watch has taken over: the direction it picked last.
     @State private var remotePattern: Pattern?
     /// Off at the start: the vibration leads, the voice is opt-in.
-    @State private var voiceOn = false
+    /// Kept between walks; also in Settings. Off at first: the vibration leads.
+    @AppStorage(GuidanceSettings.voiceKey) private var voiceOn = false
+    /// The iPhone's own vibration (Settings). Off, the dial still flashes along.
+    @AppStorage(GuidanceSettings.vibrationKey) private var vibrationOn = true
+    /// The dial is being held: the voice speaks meanwhile, the setting left as it is.
+    @State private var voiceHeld = false
+    /// Going to a stop, say what can be caught there (Settings).
+    @AppStorage(GuidanceSettings.departuresKey) private var announcesDepartures = true
+    /// The voice speaks: switched on, or the dial held.
+    private var speaksAloud: Bool { voiceOn || voiceHeld }
     @State private var voice = GuidanceVoice()
     /// True while a finger holds the dial down (past `dialHoldDuration`).
     @GestureState private var holdingDial = false
     /// The next step card's height, for where the map's compass goes under it.
     @State private var cardHeight: CGFloat = 70
-    /// The hold on the dial turned the voice on, so letting go turns it off again.
-    @State private var voiceOnForHold = false
     /// Set when a hold on the dial starts: the tap that comes with lifting the
     /// finger mustn't say the direction again. Set at the start, because the
     /// tap arrives before the hold's end is noticed.
@@ -293,13 +310,18 @@ struct GuidanceView: View {
             announce(GuidanceStep.of(received).voiceLine)
         }
         // The route picked a new direction: say it and play it, here and on the watch.
-        .onChange(of: navigator.pattern) { _, new in
+        .onChange(of: navigator.pattern) { old, new in
             guard remotePattern == nil, let new else { return }
             announce(GuidanceStep.live(navigator, to: destination.name).voiceLine)
+            // Guidance has started: going to a stop, say what can be caught there.
+            if old == nil, new != .arrived, destination.isStop, announcesDepartures, !saidDepartures {
+                saidDepartures = true
+                Task { await announceDepartures() }
+            }
             // That line said the distance, so the countdown doesn't say it again.
             countDown(speaks: false)
             phoneHaptics.forwardInterval = navigator.goStraightInterval
-            phoneHaptics.play(new, vibrate: true, once: new == .arrived)
+            phoneHaptics.play(new, vibrate: vibrationOn, once: new == .arrived)
             if connectivity.isReachable { connectivity.send(new, interval: navigator.goStraightInterval) }
         }
         .onChange(of: navigator.distanceToNext) { countDown(speaks: true) }
@@ -386,7 +408,7 @@ struct GuidanceView: View {
                     mapWithCard(top: top)
                         .layoutPriority(simulation == .drag ? 2 : 0.5)
                 } else {
-                    destinationCard
+                    topCard
                         .padding(.top, top + cardGap)
                         .padding(.horizontal, 16)
                 }
@@ -546,7 +568,7 @@ struct GuidanceView: View {
                 }
                 Color.clear
                     .onChange(of: mapFits, initial: true) { _, fits in mapIsVisible = fits }
-                destinationCard
+                topCard
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
                     // Lifted off the map a little.
                     .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
@@ -642,6 +664,57 @@ struct GuidanceView: View {
 
     /// The next turn and how far off it is; after the last one, the
     /// destination and how far it is to go. The bar is the whole route.
+    /// The next step, or while it is being said, what can be caught at the stop.
+    @ViewBuilder
+    private var topCard: some View {
+        if let catchable {
+            catchableCard(catchable)
+                .transition(.opacity)
+        } else {
+            destinationCard
+                .transition(.opacity)
+        }
+    }
+
+    /// "At Nieuwezijds Kolk in 7 min", and a row a departure: its line's
+    /// badge, where it goes, and the wait once there. A tap goes back to the
+    /// next step. VoiceOver is reading the same out already.
+    private func catchableCard(_ catchable: Catchable) -> some View {
+        Button {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { self.catchable = nil }
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("At \(destination.name) in \(catchable.minutesAway) min, you can catch")
+                    .font(.atkinson(15, .bold, relativeTo: .subheadline))
+                    .foregroundStyle(Palette.secondaryText)
+                ForEach(catchable.departures, id: \.departure.id) { item in
+                    HStack(spacing: 10) {
+                        LineBadge(line: Transit.Line(mode: item.departure.mode, name: item.departure.line,
+                                                     color: item.departure.color,
+                                                     textColor: item.departure.textColor),
+                                  minWidth: 36)
+                        Text(item.departure.towards)
+                            .font(.atkinson(17, .bold, relativeTo: .headline))
+                            .foregroundStyle(Palette.text)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(item.wait <= 0 ? "on arrival" : "+\(item.wait) min")
+                            .font(.atkinson(15, .bold, relativeTo: .subheadline))
+                            .monospacedDigit()
+                            .foregroundStyle(Palette.secondaryText)
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .modifier(CardGlass())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Departures at \(destination.name)")
+        .accessibilityHint("Shows the next step again")
+    }
+
     private var destinationCard: some View {
         let destinationName = remotePattern == nil ? destination.name : "Centraal"
         let turn = upcomingTurn
@@ -707,7 +780,7 @@ struct GuidanceView: View {
                               title: voiceOn ? "Voice on" : "Voice off") {
                     voiceOn.toggle()
                     // Set by hand while the dial is held: letting go leaves it so.
-                    voiceOnForHold = false
+                    voiceHeld = false
                     if !voiceOn { voice.stop() }
                 }
                 .accessibilityLabel("Voice")
@@ -804,10 +877,7 @@ struct GuidanceView: View {
     /// The dial is held: the voice comes on (if it was off) and says where to go.
     private func startHeldVoice() {
         dialWasHeld = true
-        if !voiceOn {
-            voiceOn = true
-            voiceOnForHold = true
-        }
+        voiceHeld = true
         say(step.voiceLine, force: true)
     }
 
@@ -819,19 +889,78 @@ struct GuidanceView: View {
             try? await Task.sleep(for: .milliseconds(500))
             dialWasHeld = false
         }
-        guard voiceOnForHold else { return }
-        voiceOnForHold = false
-        voiceOn = false
+        voiceHeld = false
     }
 
     private func announce(_ line: String) {
         say(line, force: false)
     }
 
+    /// Going to a stop: the trams, metros (or buses) that can be caught once
+    /// there, at an ordinary walking pace, said once guidance has started:
+    /// "You'll reach Dam in about 12 minutes. You can catch tram 2 to Nieuw
+    /// Sloten 1 minute after you arrive, …". Up to four within half an hour
+    /// of getting there: every line once before any line's other way.
+    private func announceDepartures() async {
+        let walk = navigator.walkingTimeLeft
+        let arrival = Date.now.addingTimeInterval(walk)
+        guard let departures = await Transit.departures(at: destination, after: arrival) else { return }
+        // Each way of each line once, soonest first.
+        var seen = Set<String>()
+        let ways = departures.filter {
+            $0.time >= arrival && $0.time <= arrival.addingTimeInterval(30 * 60)
+                && seen.insert("\($0.mode)-\($0.line)-\($0.towards)").inserted
+        }
+        // Every line before a line's other way, then back in time order.
+        var lines = Set<String>()
+        let firstOfEach = ways.filter { lines.insert("\($0.mode)-\($0.line)").inserted }
+        let catchable = (firstOfEach + ways.filter { way in !firstOfEach.contains { $0.id == way.id } })
+            .prefix(4)
+            .sorted { $0.time < $1.time }
+
+        let minutes = max(1, Int((walk / 60).rounded()))
+        let reach = "You'll reach \(destination.name) in about \(minutes) minute\(minutes == 1 ? "" : "s")."
+        guard !catchable.isEmpty else {
+            queue("\(reach) Nothing leaves there in the half hour after you arrive.")
+            return
+        }
+        let parts = catchable.map { departure -> String in
+            let wait = Int(departure.time.timeIntervalSince(arrival) / 60)
+            let when = wait <= 0 ? "as you arrive" : wait == 1 ? "1 minute after you arrive"
+                : "\(wait) minutes after you arrive"
+            // A train's "line" is its kind ("IC"): just "train to …".
+            let line = departure.mode == .train ? "train" : "\(departure.mode.name.lowercased()) \(departure.line)"
+            return "\(line) to \(departure.towards), \(when)"
+        }
+        let line = "\(reach) You can catch \(ListFormatter.localizedString(byJoining: parts))."
+        queue(line)
+        // Shown in the next step card's place while it's said: about 14
+        // characters a second, after the direction said before it.
+        let shown = Catchable(minutesAway: minutes, departures: catchable.map {
+            ($0, Int($0.time.timeIntervalSince(arrival) / 60))
+        })
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { self.catchable = shown }
+        try? await Task.sleep(for: .seconds(max(10, Double(line.count) / 14 + 4)))
+        // Unless it was tapped away (or a later one took its place) meanwhile.
+        guard self.catchable?.departures.first?.departure.id == shown.departures.first?.departure.id else { return }
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { self.catchable = nil }
+    }
+
+    /// Like `announce`, but after whatever is being said, not over it.
+    private func queue(_ line: String) {
+        if UIAccessibility.isVoiceOverRunning {
+            var text = AttributedString(line)
+            text.accessibilitySpeechAnnouncementPriority = .low
+            AccessibilityNotification.Announcement(text).post()
+        } else if speaksAloud {
+            voice.speak(line, after: true)
+        }
+    }
+
     private func say(_ line: String, force: Bool) {
         if UIAccessibility.isVoiceOverRunning {
             AccessibilityNotification.Announcement(line).post()
-        } else if voiceOn || force {
+        } else if speaksAloud || force {
             voice.speak(line)
         }
     }
@@ -1762,8 +1891,9 @@ private final class GuidanceVoice {
         synthesizer.usesApplicationAudioSession = false
     }
 
-    func speak(_ line: String) {
-        synthesizer.stopSpeaking(at: .immediate)
+    /// `after`: once what is being said is done, instead of cutting it off.
+    func speak(_ line: String, after: Bool = false) {
+        if !after { synthesizer.stopSpeaking(at: .immediate) }
         synthesizer.speak(.tandem(line))
     }
 

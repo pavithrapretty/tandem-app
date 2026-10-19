@@ -126,13 +126,17 @@ enum Transit {
 
     /// The next trams, metros and trains from the stop, soonest first. Nil
     /// without internet.
+    /// `after`: from then on instead of from now (when the user will get there).
     static func departures(from stopID: String, count: Int = 30,
-                           modes: Set<Mode> = Mode.rail) async -> [Departure]? {
+                           modes: Set<Mode> = Mode.rail, after: Date? = nil) async -> [Departure]? {
         var components = URLComponents(string: "https://api.transitous.org/api/v5/stoptimes")!
         components.queryItems = [
             URLQueryItem(name: "stopId", value: stopID),
             URLQueryItem(name: "n", value: "\(count)"),
         ]
+        if let after {
+            components.queryItems?.append(URLQueryItem(name: "time", value: ISO8601DateFormatter().string(from: after)))
+        }
         guard let response: StopTimes = await fetch(components.url!) else { return nil }
         return response.stopTimes.compactMap { time in
             guard let mode = Mode(time.mode), modes.contains(mode), time.cancelled != true,
@@ -156,12 +160,12 @@ enum Transit {
     /// The departures from `destination`, if it is a stop: by its own stop if
     /// it was found here, else by the one at the same spot (a stop picked in
     /// search, which comes from Apple Maps).
-    static func departures(at destination: Destination) async -> [Departure]? {
+    static func departures(at destination: Destination, after: Date? = nil) async -> [Departure]? {
         guard destination.isStop else { return nil }
         let modes = destination.transitModes ?? Mode.rail
-        if let id = destination.transitStopID { return await departures(from: id, modes: modes) }
+        if let id = destination.transitStopID { return await departures(from: id, modes: modes, after: after) }
         guard let stop = await nearestStop(near: destination.coordinate, within: 150, modes: modes) else { return nil }
-        return await departures(from: stop.id, modes: modes)
+        return await departures(from: stop.id, modes: modes, after: after)
     }
 
     /// The lines that stop there, by mode, for the home screen's card:

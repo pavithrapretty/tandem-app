@@ -60,6 +60,8 @@ final class RouteNavigator: NSObject, ObservableObject {
     @Published private(set) var distanceToNext: Double = 0
     /// Metres left along the route.
     @Published private(set) var remaining: Double = 0
+    /// Seconds of walking left, at an ordinary walking pace.
+    var walkingTimeLeft: TimeInterval { remaining / walkingSpeed }
     /// How much of the route is done, 0 to 1.
     @Published private(set) var progress: Double = 0
     @Published private(set) var lastLocation: CLLocation?

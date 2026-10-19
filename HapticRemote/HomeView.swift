@@ -27,6 +27,8 @@ private enum SearchMode: Identifiable {
 struct HomeView: View {
     @StateObject private var connectivity = ConnectivityManager()
     @StateObject private var phoneHaptics = PhoneHapticPlayer()
+    /// The iPhone's own vibration (Settings).
+    @AppStorage(GuidanceSettings.vibrationKey) private var vibrationOn = true
 
     /// The place picked in search; nil shows the nearest stop.
     @State private var picked: Destination?
@@ -94,7 +96,7 @@ struct HomeView: View {
         .onReceive(connectivity.received) { pattern in
             if let pattern {
                 // Arrived is said once; the directions repeat until the next one.
-                phoneHaptics.play(pattern, vibrate: true, once: pattern == .arrived)
+                phoneHaptics.play(pattern, vibrate: vibrationOn, once: pattern == .arrived)
             } else {
                 phoneHaptics.stop()
             }

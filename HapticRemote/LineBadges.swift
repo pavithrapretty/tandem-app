@@ -57,12 +57,25 @@ struct LineBadges: View {
     }
 
     private func badge(_ line: Transit.Line) -> some View {
+        LineBadge(line: line, textColor: textColor, badgeColor: badgeColor)
+    }
+}
+
+/// One line's badge: its number in its own colours, or the place's quiet ones.
+struct LineBadge: View {
+    let line: Transit.Line
+    var textColor: Color = Palette.text
+    var badgeColor: Color = Palette.text.opacity(0.14)
+    /// Wider in a list, so what follows the badges lines up.
+    var minWidth: CGFloat = 24
+
+    var body: some View {
         Text(line.name)
             .font(.atkinson(14, .bold, relativeTo: .footnote))
             .monospacedDigit()
             .foregroundStyle(line.textColor.map { Color(hex: $0) } ?? textColor)
             .padding(.horizontal, 6)
-            .frame(minWidth: 24, minHeight: 22)
+            .frame(minWidth: minWidth, minHeight: 22)
             .background(line.color.map { Color(hex: $0) } ?? badgeColor,
                         in: RoundedRectangle(cornerRadius: 6))
     }

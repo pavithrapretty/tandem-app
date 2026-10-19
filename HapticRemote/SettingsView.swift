@@ -5,8 +5,11 @@
 //  "20 Settings" in Figma, opened from the sliders button on the home screen.
 //  The back button is the system one from the navigation stack ("Home").
 //
-//  The two navigation sliders (dial look-ahead, reroute distance) work and
-//  are kept for every route. The other values are only shown for now.
+//  Voice guidance, departures at the stop and vibration switch on and
+//  off, and are kept (the
+//  navigation screen's Voice button is the same setting). The two
+//  navigation sliders (dial look-ahead, reroute distance) work and are kept
+//  for every route. The other values are only shown for now.
 //  "Feel the signals again" works and
 //  opens the tutorial. "Simulate a walk to Centraal" opens the navigation
 //  screen with buttons to walk the route by hand; "Simulate by dragging the
@@ -16,6 +19,16 @@
 //
 
 import SwiftUI
+
+/// The guidance settings kept between walks (UserDefaults keys).
+enum GuidanceSettings {
+    /// The voice says each direction. Off at first: the vibration leads.
+    static let voiceKey = "voiceGuidance"
+    /// The iPhone vibrates the signals. On at first.
+    static let vibrationKey = "vibration"
+    /// Going to a stop: what can be caught there is said as guidance starts. On at first.
+    static let departuresKey = "announceDepartures"
+}
 
 struct SettingsView: View {
     /// For the simulated walk, which vibrates here and on the watch.
@@ -29,6 +42,9 @@ struct SettingsView: View {
     /// Read by GuidanceView when a route starts.
     @AppStorage("dialLookAhead") private var lookAhead = RouteNavigator.defaultLookAhead
     @AppStorage("rerouteDistance") private var rerouteDistance = RouteNavigator.defaultRerouteDistance
+    @AppStorage(GuidanceSettings.voiceKey) private var voiceOn = false
+    @AppStorage(GuidanceSettings.vibrationKey) private var vibrationOn = true
+    @AppStorage(GuidanceSettings.departuresKey) private var announcesDepartures = true
 
     var body: some View {
         TutorialPage {
@@ -127,9 +143,16 @@ struct SettingsView: View {
 
     private var settingsList: some View {
         VStack(spacing: 0) {
-            row(icon: "icon-settings-volume", title: "Voice guidance", value: "On")
+            toggleRow(icon: "icon-settings-volume", title: "Voice guidance", isOn: $voiceOn,
+                      hint: "Says each direction out loud while navigating. VoiceOver reads them either way.")
             divider
             row(icon: "icon-settings-gauge", title: "Voice speed", value: "Normal")
+            divider
+            toggleRow(systemImage: "tram", title: "Departures at the stop", isOn: $announcesDepartures,
+                      hint: "Walking to a stop, says which trams, metros or buses you can catch when you get there.")
+            divider
+            toggleRow(icon: "icon-settings-wave", title: "Vibration", isOn: $vibrationOn,
+                      hint: "The iPhone vibrates the signals. Off, the dial still lights up with them; a connected Apple Watch keeps vibrating.")
             divider
             row(icon: "icon-settings-wave", title: "Vibration strength", value: "Strong")
             divider
@@ -167,6 +190,33 @@ struct SettingsView: View {
         Rectangle()
             .fill(Palette.track)
             .frame(height: 1)
+    }
+
+    /// A setting that is on or off: VoiceOver reads "Voice guidance, switch, on".
+    /// `icon`: one of the Settings icons; or `systemImage`, an SF Symbol in their grey.
+    private func toggleRow(icon: String? = nil, systemImage: String? = nil, title: String,
+                           isOn: Binding<Bool>, hint: String) -> some View {
+        Toggle(isOn: isOn) {
+            HStack(spacing: 14) {
+                Group {
+                    if let icon {
+                        Image(icon)
+                    } else if let systemImage {
+                        Image(systemName: systemImage)
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(Palette.caption)
+                            .frame(width: 24, height: 24)
+                    }
+                }
+                .accessibilityHidden(true)
+                Text(title)
+                    .font(.atkinson(19, .bold, relativeTo: .headline))
+                    .foregroundStyle(Palette.text)
+            }
+        }
+        .tint(Palette.accent)
+        .padding(.vertical, 14)
+        .accessibilityHint(hint)
     }
 
     private func row(icon: String, title: String, value: String) -> some View {
