@@ -1223,8 +1223,11 @@ private struct DragMap: View {
                 MapPolyline(line)
                     .stroke(Palette.success, style: StrokeStyle(lineWidth: 5, lineCap: .round,
                                                                lineJoin: .round))
+                    // Over the 3D buildings and the labels: in a narrow street,
+                    // the buildings beside it hid the line on the ground.
+                    .mapOverlayLevel(level: .aboveLabels)
             }
-            Marker(destination.name, systemImage: destination.isStop ? "tram.fill" : "mappin",
+            Marker(destination.name, systemImage: destination.symbol,
                    coordinate: destination.coordinate)
                 .tint(Palette.accent)
         }
@@ -1353,10 +1356,21 @@ private struct FollowMap: View {
     @State private var glide = LocationGlide()
     @State private var frames = FrameLoop()
 
-    /// Metres of map in view ahead of the user.
-    private let metresAhead: Double = 50
-    /// The user sits this far up from the bottom edge, as a part of the map's height.
-    private let userHeight: Double = 0.3
+    /// Metres of map in view ahead of the user, in the part under the card.
+    private let metresAhead: Double = 30
+    /// The user sits this far up from the bottom edge, as a part of the
+    /// height of the map that shows (under the card).
+    private let userHeight: Double = 0.55
+
+    /// How much of the map's height shows below the next step card, which
+    /// lies over its top: 0 to 1.
+    private var visiblePart: Double {
+        guard size.height > 0 else { return 1 }
+        return min(1, max(0.1, (size.height - (controlsTop - 8)) / size.height))
+    }
+    /// Where the user sits, up from the bottom edge, as a part of the whole
+    /// map's height (card and all).
+    private var userPart: Double { userHeight * visiblePart }
 
     var body: some View {
         Map(position: $position, scope: mapScope) {
@@ -1364,8 +1378,11 @@ private struct FollowMap: View {
                 MapPolyline(line)
                     .stroke(Palette.success, style: StrokeStyle(lineWidth: 5, lineCap: .round,
                                                                lineJoin: .round))
+                    // Over the 3D buildings and the labels: in a narrow street,
+                    // the buildings beside it hid the line on the ground.
+                    .mapOverlayLevel(level: .aboveLabels)
             }
-            Marker(destination.name, systemImage: destination.isStop ? "tram.fill" : "mappin",
+            Marker(destination.name, systemImage: destination.symbol,
                    coordinate: destination.coordinate)
                 .tint(Palette.accent)
             // Where the navigator has the user: the GPS, or on a simulated walk
@@ -1460,9 +1477,10 @@ private struct FollowMap: View {
         let facing = heading.steadyDegrees ?? (location.course >= 0 ? location.course : 0)
         let northUp = (facing.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
 
-        // `metresAhead` fills the part of the map above the user (seen from
-        // straight above; tilted, more lies ahead, getting smaller).
-        let visibleHeight = metresAhead / (1 - userHeight)
+        // `metresAhead` fills the part of the map that shows above the user,
+        // between them and the card (seen from straight above; tilted, more
+        // lies ahead, getting smaller). The map runs on under the card.
+        let visibleHeight = metresAhead / ((1 - userHeight) * visiblePart)
         // Measured: a map shows about 1.23 × the camera distance across its width.
         let distance = visibleHeight * size.width / (1.23 * size.height)
         // The centre of the map lies ahead of the user, so the user sits low.
@@ -1479,13 +1497,13 @@ private struct FollowMap: View {
     }
 
     /// Metres on the ground from the user to the centre of the map, so the
-    /// user shows `userHeight` up from the bottom edge. Tilted, the ground
+    /// user shows `userPart` up from the bottom edge. Tilted, the ground
     /// near the bottom is closer to the camera, so it takes fewer metres.
     private func groundAhead(distance: Double, pitch: Double) -> Double {
         // Half the camera's view, up and down, from the measured 1.23 across.
         let halfView = atan(0.615 * size.height / size.width)
         // How far below the middle of the view the user is, as an angle.
-        let belowMiddle = atan(2 * (0.5 - userHeight) * tan(halfView))
+        let belowMiddle = atan(2 * (0.5 - userPart) * tan(halfView))
         let tilt = pitch * .pi / 180
         // Camera height × how far out the user is seen, taken from how far out the centre is.
         return distance * sin(tilt) - distance * cos(tilt) * tan(tilt - belowMiddle)
@@ -1819,13 +1837,15 @@ private struct ArrivedView: View {
         let minutes = max(0, Int(departure.time.timeIntervalSince(now) / 60))
         let time = minutes == 0 ? "Now" : "\(minutes) min"
         return HStack(spacing: 12) {
+            // In the line's own colours if it has them (GVB's metro lines).
             Text(departure.line)
                 .font(.atkinson(18, .extraBold, relativeTo: .headline))
-                .foregroundStyle(Palette.background)
+                .foregroundStyle(departure.textColor.map { Color(hex: $0) } ?? Palette.background)
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
                 .frame(width: 46, height: 34)
-                .background(Palette.left, in: RoundedRectangle(cornerRadius: 10))
+                .background(departure.color.map { Color(hex: $0) } ?? Palette.left,
+                            in: RoundedRectangle(cornerRadius: 10))
             Text(departure.towards)
                 .font(.atkinson(19, .bold, relativeTo: .headline))
                 .foregroundStyle(Palette.text)

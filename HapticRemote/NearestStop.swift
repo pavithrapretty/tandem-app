@@ -71,6 +71,21 @@ final class NearestStopFinder: NSObject, ObservableObject, CLLocationManagerDele
                            isStop: true, isNearestStop: true)
     }
 
+    /// The nearest stop of these kinds (the voice's "nearest tram stop",
+    /// "nearest bus stop"…), looking further out when there is none close by:
+    /// a train station can be kilometres off. Nil if none, or no internet.
+    static func find(near location: CLLocationCoordinate2D, modes: Set<Transit.Mode>) async -> Destination? {
+        let radii: [Double] = modes == [.train] ? [1_000, 3_000, 6_000] : [750, 2_000]
+        for radius in radii {
+            if let stop = await Transit.nearestStop(near: location, within: radius, modes: modes) {
+                return Destination(name: stop.name, subtitle: "", coordinate: stop.coordinate,
+                                   isStop: true, transitStopID: stop.id,
+                                   transitModes: modes == [.bus] ? [.bus] : nil)
+            }
+        }
+        return nil
+    }
+
     private func handle(_ location: CLLocation) {
         guard location.horizontalAccuracy >= 0, location.horizontalAccuracy <= 100 else { return }
         guard !isSearching else { return }

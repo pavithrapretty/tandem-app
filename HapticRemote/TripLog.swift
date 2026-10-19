@@ -123,9 +123,15 @@ final class TripRecorder {
 
     // What came of it.
 
-    func route(_ points: [CLLocationCoordinate2D], turns: [RouteNavigator.Turn], reason: String) {
+    func route(_ points: [CLLocationCoordinate2D], turns: [RouteNavigator.Turn],
+               steps: [(coordinate: CLLocationCoordinate2D, instructions: String)], reason: String) {
         log("route", [
             "reason": reason,
+            // Every MapKit step, turn or not: where it starts and what it says.
+            "steps": steps.map {
+                ["lat": $0.coordinate.latitude, "lon": $0.coordinate.longitude,
+                 "instructions": $0.instructions] as [String: Any]
+            },
             "points": points.map { [$0.latitude, $0.longitude] },
             "turns": turns.map {
                 ["lat": $0.coordinate.latitude, "lon": $0.coordinate.longitude, "along": $0.along,
@@ -231,7 +237,8 @@ final class TripReplay: ObservableObject, Identifiable {
 
     /// The first route the walk got, as it was: so the replay starts on the
     /// same one. (Later routes are fetched afresh, where the navigator wants them.)
-    var firstRoute: (points: [CLLocationCoordinate2D], turns: [RouteNavigator.Turn])? {
+    var firstRoute: (points: [CLLocationCoordinate2D], turns: [RouteNavigator.Turn],
+                     steps: [(coordinate: CLLocationCoordinate2D, instructions: String)])? {
         guard let route = events.first(where: { $0.type == "route" }),
               let points = route["points"] as? [[Double]] else { return nil }
         let recordedTurns = (route.fields["turns"] as? [[String: Any]]) ?? []
@@ -242,8 +249,13 @@ final class TripReplay: ObservableObject, Identifiable {
                                        instructions: turn["instructions"] as? String ?? "",
                                        isLeft: isLeft, along: along)
         }
+        let recordedSteps = (route.fields["steps"] as? [[String: Any]]) ?? []
+        let steps = recordedSteps.compactMap { step -> (coordinate: CLLocationCoordinate2D, instructions: String)? in
+            guard let lat = step["lat"] as? Double, let lon = step["lon"] as? Double else { return nil }
+            return (CLLocationCoordinate2D(latitude: lat, longitude: lon), step["instructions"] as? String ?? "")
+        }
         return (points.compactMap { $0.count == 2 ? CLLocationCoordinate2D(latitude: $0[0], longitude: $0[1]) : nil },
-                turns)
+                turns, steps)
     }
 
     func start() {

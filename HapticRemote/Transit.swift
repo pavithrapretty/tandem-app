@@ -5,7 +5,8 @@
 //  Stops and departures of trams, metros and trains, from Transitous
 //  (api.transitous.org): a free, open timetable service with the Dutch
 //  OpenOV data in it, live times included. No account or key needed.
-//  Buses, ferries and coaches are left out.
+//  Trams, metros and trains (`Mode.rail`) unless buses are asked for (the
+//  voice's "nearest bus stop"); ferries and coaches are left out.
 //
 
 import CoreLocation
@@ -13,15 +14,19 @@ import Foundation
 
 enum Transit {
     enum Mode {
-        case tram, metro, train
+        case tram, metro, train, bus
 
-        /// From Transitous's mode names; nil for buses, ferries and the rest.
+        /// What the app shows unless asked for buses.
+        static let rail: Set<Mode> = [.tram, .metro, .train]
+
+        /// From Transitous's mode names; nil for ferries, coaches and the rest.
         init?(_ name: String) {
             switch name {
             case "TRAM": self = .tram
             case "SUBWAY", "METRO": self = .metro
             case "RAIL", "REGIONAL_RAIL", "REGIONAL_FAST_RAIL", "SUBURBAN",
                  "LONG_DISTANCE", "HIGHSPEED_RAIL", "NIGHT_RAIL": self = .train
+            case "BUS", "TROLLEYBUS": self = .bus
             default: return nil
             }
         }
@@ -31,6 +36,7 @@ enum Transit {
             case .tram: "Tram"
             case .metro: "Metro"
             case .train: "Train"
+            case .bus: "Bus"
             }
         }
     }
@@ -50,11 +56,44 @@ enum Transit {
         let line: String
         let towards: String
         let time: Date
+        /// The line's own colours (GVB's metro lines have them), as 0xRRGGBB.
+        /// Nil when the timetable gives none (GVB's trams, NS's trains).
+        var color: UInt32? = nil
+        var textColor: UInt32? = nil
+    }
+
+    /// A line that stops somewhere, with its colours if it has them.
+    struct Line: Identifiable, Hashable {
+        let mode: Mode
+        let name: String
+        let color: UInt32?
+        let textColor: UInt32?
+        var id: String { "\(mode)-\(name)" }
+    }
+
+    /// The lines that stop somewhere, by mode (trams, then metros, then
+    /// trains), for showing as badges, and as text.
+    struct Lines {
+        /// Trains as one group with no lines: their kinds aren't lines.
+        let groups: [(mode: Mode, lines: [Line])]
+        /// "Tram 7, 12 · Metro 52"
+        let short: String
+        /// "Tram 7 and 12. Metro 52", for VoiceOver.
+        let spoken: String
     }
 
     /// The tram, metro or train stop closest to `location`, within `radius`
     /// metres. Nil if there is none, or no internet.
-    static func nearestStop(near location: CLLocationCoordinate2D, within radius: Double) async -> Stop? {
+    static func nearestStop(near location: CLLocationCoordinate2D, within radius: Double,
+                            modes: Set<Mode> = Mode.rail) async -> Stop? {
+        await stops(near: location, within: radius, modes: modes)?.first?.stop
+    }
+
+    /// The tram, metro and train stops within `radius` metres of `location`,
+    /// nearest first, each once (its platforms are one stop), with how far
+    /// off it is in a straight line and what stops there. Nil without internet.
+    static func stops(near location: CLLocationCoordinate2D, within radius: Double,
+                      modes wanted: Set<Mode> = Mode.rail) async -> [(stop: Stop, distance: Double, modes: Set<Mode>)]? {
         let latitude = radius / 111_000
         let longitude = radius / (111_000 * cos(location.latitude * .pi / 180))
         var components = URLComponents(string: "https://api.transitous.org/api/v1/map/stops")!
@@ -64,21 +103,31 @@ enum Transit {
         ]
         guard let places: [Place] = await fetch(components.url!) else { return nil }
         let here = CLLocation(latitude: location.latitude, longitude: location.longitude)
-        let closest = places
-            .filter { ($0.modes ?? []).contains { Mode($0) != nil } }
-            .map { ($0, here.distance(from: CLLocation(latitude: $0.lat, longitude: $0.lon))) }
-            .filter { $0.1 <= radius }
-            .min { $0.1 < $1.1 }?.0
-        guard let closest else { return nil }
-        // The station as a whole if it has one; its platforms one by one otherwise
-        // (Transitous adds the other platforms of the same name itself).
-        return Stop(id: closest.parentId ?? closest.stopId, name: shortName(closest.name),
-                    coordinate: CLLocationCoordinate2D(latitude: closest.lat, longitude: closest.lon))
+        var nearest: [String: (stop: Stop, distance: Double, modes: Set<Mode>)] = [:]
+        for place in places {
+            let modes = Set((place.modes ?? []).compactMap(Mode.init)).intersection(wanted)
+            guard !modes.isEmpty else { continue }
+            let distance = here.distance(from: CLLocation(latitude: place.lat, longitude: place.lon))
+            guard distance <= radius else { continue }
+            let name = shortName(place.name)
+            // The station as a whole if it has one; its platforms one by one otherwise
+            // (Transitous adds the other platforms of the same name itself).
+            let stop = Stop(id: place.parentId ?? place.stopId, name: name,
+                            coordinate: CLLocationCoordinate2D(latitude: place.lat, longitude: place.lon))
+            if let known = nearest[name] {
+                let all = known.modes.union(modes)
+                nearest[name] = distance < known.distance ? (stop, distance, all) : (known.stop, known.distance, all)
+            } else {
+                nearest[name] = (stop, distance, modes)
+            }
+        }
+        return nearest.values.sorted { $0.distance < $1.distance }
     }
 
     /// The next trams, metros and trains from the stop, soonest first. Nil
     /// without internet.
-    static func departures(from stopID: String, count: Int = 30) async -> [Departure]? {
+    static func departures(from stopID: String, count: Int = 30,
+                           modes: Set<Mode> = Mode.rail) async -> [Departure]? {
         var components = URLComponents(string: "https://api.transitous.org/api/v5/stoptimes")!
         components.queryItems = [
             URLQueryItem(name: "stopId", value: stopID),
@@ -86,12 +135,20 @@ enum Transit {
         ]
         guard let response: StopTimes = await fetch(components.url!) else { return nil }
         return response.stopTimes.compactMap { time in
-            guard let mode = Mode(time.mode), time.cancelled != true,
+            guard let mode = Mode(time.mode), modes.contains(mode), time.cancelled != true,
                   let departure = time.place.departure else { return nil }
             let line = time.routeShortName ?? time.displayName ?? ""
+            // The timetable's colours; GVB's trams from its network map, which the timetable lacks.
+            var color = time.routeColor.flatMap(hex)
+            var textColor = time.routeTextColor.flatMap(hex)
+            if color == nil, mode == .tram, time.agencyName == "GVB", let tram = gvbTramColors[line] {
+                color = tram
+                textColor = readableText(on: tram)
+            }
             return Departure(id: (time.tripId ?? UUID().uuidString) + departure.description,
                              mode: mode, line: mode == .train ? trainKind(line) : line,
-                             towards: time.headsign ?? "", time: departure)
+                             towards: time.headsign ?? "", time: departure,
+                             color: color, textColor: textColor)
         }
         .sorted { $0.time < $1.time }
     }
@@ -101,35 +158,73 @@ enum Transit {
     /// search, which comes from Apple Maps).
     static func departures(at destination: Destination) async -> [Departure]? {
         guard destination.isStop else { return nil }
-        if let id = destination.transitStopID { return await departures(from: id) }
-        guard let stop = await nearestStop(near: destination.coordinate, within: 150) else { return nil }
-        return await departures(from: stop.id)
+        let modes = destination.transitModes ?? Mode.rail
+        if let id = destination.transitStopID { return await departures(from: id, modes: modes) }
+        guard let stop = await nearestStop(near: destination.coordinate, within: 150, modes: modes) else { return nil }
+        return await departures(from: stop.id, modes: modes)
     }
 
     /// The lines that stop there, by mode, for the home screen's card:
     /// "Tram 7, 12 · Metro 52" and, for VoiceOver, "Tram 7 and 12. Metro 52".
     /// Nil without any.
-    static func lines(of departures: [Departure]) -> (short: String, spoken: String)? {
+    static func lines(of departures: [Departure]) -> Lines? {
+        var groups: [(mode: Mode, lines: [Line])] = []
         var short: [String] = [], spoken: [String] = []
-        for mode in [Mode.tram, .metro, .train] {
-            var lines: [String] = []
-            for departure in departures where departure.mode == mode && !lines.contains(departure.line) {
-                lines.append(departure.line)
+        for mode in [Mode.tram, .metro, .train, .bus] {
+            var lines: [Line] = []
+            for departure in departures where departure.mode == mode
+                && !lines.contains(where: { $0.name == departure.line }) {
+                lines.append(Line(mode: mode, name: departure.line,
+                                  color: departure.color, textColor: departure.textColor))
             }
             guard !lines.isEmpty else { continue }
             if mode == .train {
+                groups.append((mode, []))
                 short.append("Train")
                 spoken.append("Train")
                 continue
             }
             // Numbers in order, and only the first few at a big station.
-            lines.sort { $0.localizedStandardCompare($1) == .orderedAscending }
+            lines.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             let shown = Array(lines.prefix(5))
-            short.append("\(mode.name) \(shown.joined(separator: ", "))")
-            spoken.append("\(mode.name) \(ListFormatter.localizedString(byJoining: shown))")
+            groups.append((mode, shown))
+            short.append("\(mode.name) \(shown.map(\.name).joined(separator: ", "))")
+            spoken.append("\(mode.name) \(ListFormatter.localizedString(byJoining: shown.map(\.name)))")
         }
         guard !short.isEmpty else { return nil }
-        return (short.joined(separator: " · "), spoken.joined(separator: ". "))
+        return Lines(groups: groups, short: short.joined(separator: " · "), spoken: spoken.joined(separator: ". "))
+    }
+
+    /// GVB's tram lines' colours, from its network map (sampled from a
+    /// screenshot of its legend, so close rather than exact).
+    private static let gvbTramColors: [String: UInt32] = [
+        "1": 0xEC5C3D, "2": 0x14B050, "3": 0x9C96C7, "4": 0xED75AB, "5": 0x7871B2,
+        "7": 0xF39775, "12": 0x199056, "13": 0xB6D14B, "14": 0xE53792, "17": 0x86C24D,
+        "19": 0xEB785B, "24": 0xF0A8C5, "25": 0xE0424A, "26": 0x7975AC, "27": 0x2AAE9F,
+    ]
+
+    /// White or near-black, whichever stands out more on `color` (GVB prints
+    /// white on all of them, which is hard to read on the light ones).
+    private static func readableText(on color: UInt32) -> UInt32 {
+        func luminance(_ value: UInt32) -> Double {
+            let channels = [(value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF].map { channel -> Double in
+                let c = Double(channel) / 255
+                return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+        }
+        let dark: UInt32 = 0x111111
+        let background = luminance(color)
+        let onWhite = 1.05 / (background + 0.05)
+        let onDark = (background + 0.05) / (luminance(dark) + 0.05)
+        return onWhite >= onDark ? 0xFFFFFF : dark
+    }
+
+    /// "00adef" → 0x00ADEF.
+    private static func hex(_ text: String) -> UInt32? {
+        let digits = text.hasPrefix("#") ? String(text.dropFirst()) : text
+        guard digits.count == 6 else { return nil }
+        return UInt32(digits, radix: 16)
     }
 
     // MARK: - Under the hood
@@ -154,6 +249,9 @@ enum Transit {
             let displayName: String?
             let tripId: String?
             let cancelled: Bool?
+            let routeColor: String?
+            let routeTextColor: String?
+            let agencyName: String?
         }
         let stopTimes: [StopTime]
     }

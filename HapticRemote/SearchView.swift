@@ -6,7 +6,8 @@
 //  screen, and its voice search ("06 Search · Listening" in Figma), opened
 //  from the microphone button there or in the field. One screen for both:
 //  the same field and search, with Apple Maps' suggestions below it while
-//  typing, or the microphone while listening. Picking a place (or saying
+//  typing (before anything is typed: the tram, metro and train stops
+//  nearby, nearest first), or the microphone while listening. Picking a place (or saying
 //  one: the first place Apple Maps finds) shows it on the home screen, in
 //  the lavender card and on the map, ready to start walking directions.
 //  The voice parts are in VoiceSearch.swift.
@@ -76,6 +77,7 @@ struct SearchView: View {
         .ignoresSafeArea(.keyboard, edges: mode == .listening ? .bottom : [])
         .background(Palette.background.ignoresSafeArea())
         .preferredColorScheme(.dark)
+        .task { await search.loadNearby() }
         .onAppear {
             listener.onFinish = finishedSpeaking
             if startsListening { listen() } else { fieldFocused = true }
@@ -104,6 +106,18 @@ struct SearchView: View {
             AccessibilityNotification.Announcement(
                 count == 0 ? "No results" : count == 1 ? "1 result" : "\(count) results").post()
         }
+    }
+
+    /// The kind of stop asked for, and what to call it: "nearest bus stop"
+    /// is buses. Nil for just "nearest stop".
+    private static func requestedKind(in spoken: String) -> (Set<Transit.Mode>, String)? {
+        if spoken.contains("bus") { return ([.bus], "bus stop") }
+        if spoken.contains("metro") || spoken.contains("subway") || spoken.contains("underground") {
+            return ([.metro], "metro station")
+        }
+        if spoken.contains("train") || spoken.contains("railway") { return ([.train], "train station") }
+        if spoken.contains("tram") { return ([.tram], "tram stop") }
+        return nil
     }
 
     // MARK: - Header and field
@@ -164,6 +178,9 @@ struct SearchView: View {
     private var results: some View {
         ScrollView {
             LazyVStack(spacing: 10) {
+                if search.query.isEmpty {
+                    nearbyStops
+                }
                 ForEach(search.suggestions, id: \.self) { suggestion in
                     row(suggestion)
                 }
@@ -220,6 +237,78 @@ struct SearchView: View {
         .disabled(search.resolving != nil)
         .accessibilityElement(children: .combine)
         .accessibilityHint("Shows it on the home screen")
+    }
+
+    // MARK: - Typing: stops nearby, before anything is typed
+
+    /// The tram, metro and train stops within a kilometre, nearest first,
+    /// with their lines once those are in. Nothing without the user's location.
+    @ViewBuilder
+    private var nearbyStops: some View {
+        if !search.nearby.isEmpty || search.isLoadingNearby {
+            Text("STOPS NEAR YOU")
+                .font(.atkinson(14, .bold, relativeTo: .footnote))
+                .tracking(0.84)
+                .foregroundStyle(Palette.secondaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+                .accessibilityAddTraits(.isHeader)
+        }
+        if search.isLoadingNearby, search.nearby.isEmpty {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("Finding stops near you…")
+                    .font(.atkinson(17, relativeTo: .body))
+                    .foregroundStyle(Palette.secondaryText)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+            .accessibilityElement(children: .combine)
+        }
+        ForEach(search.nearby) { stop in
+            Button {
+                onPick(Destination(name: stop.stop.name, subtitle: "", coordinate: stop.stop.coordinate,
+                                   isStop: true, transitStopID: stop.stop.id))
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: stop.modes.contains(.tram) ? "tram.fill"
+                          : stop.modes.contains(.metro) ? "tram.fill.tunnel" : "train.side.front.car")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Palette.accent)
+                        .frame(width: 44, height: 44)
+                        .background(Palette.accent.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        // The distance beside the name; the lines under it, a mode a line.
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(stop.stop.name)
+                                .font(.atkinson(18, .bold, relativeTo: .headline))
+                                .foregroundStyle(Palette.text)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(stop.distanceText)
+                                .font(.atkinson(15, relativeTo: .subheadline))
+                                .monospacedDigit()
+                                .foregroundStyle(Palette.secondaryText)
+                        }
+                        if let lines = stop.lines {
+                            LineBadges(lines: lines, textColor: Palette.secondaryText,
+                                       badgeColor: Palette.text.opacity(0.12), separateModes: true)
+                        }
+                    }
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(Palette.card, in: RoundedRectangle(cornerRadius: 20))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(stop.stop.name). \(stop.lines.map { "\($0.spoken). " } ?? "")\(stop.distanceSpoken) away")
+            .accessibilityHint("Shows it on the home screen")
+        }
     }
 
     private func pick(_ suggestion: MKLocalSearchCompletion) {
@@ -347,7 +436,24 @@ struct SearchView: View {
     private func understand(_ words: String) {
         listener.stop()
         let spoken = words.lowercased()
-        if spoken.contains("nearest") {
+        // "Nearest tram stop", "closest train station"…: that kind only.
+        if spoken.contains("nearest") || spoken.contains("closest"),
+           let (modes, kind) = Self.requestedKind(in: spoken) {
+            phase = .lookingUp
+            Task {
+                guard let here = CLLocationManager().location?.coordinate else {
+                    phase = .failed("Don't know where you are", "Turn on Location Services for Tandem")
+                    return
+                }
+                if let stop = await NearestStopFinder.find(near: here, modes: modes) {
+                    onPick(stop)
+                } else {
+                    phase = .failed("No \(kind) nearby", "Try another kind of stop, or say a place")
+                }
+            }
+            return
+        }
+        if spoken.contains("nearest") || spoken.contains("closest") {
             phase = .lookingUp
             Task {
                 let stop: Destination? = if let here = CLLocationManager().location?.coordinate {
@@ -447,6 +553,49 @@ private final class PlaceSearch: NSObject, ObservableObject, MKLocalSearchComple
     @Published private(set) var message: String?
     /// The suggestion being looked up after a tap.
     @Published private(set) var resolving: MKLocalSearchCompletion?
+
+    /// A stop near the user, for the list before anything is typed.
+    struct NearbyStop: Identifiable {
+        let stop: Transit.Stop
+        /// Metres, in a straight line.
+        let distance: Double
+        let modes: Set<Transit.Mode>
+        /// "Tram 2, 4 · Metro 52", once fetched.
+        var lines: Transit.Lines?
+        var id: String { stop.id }
+
+        var distanceText: String {
+            distance < 1000 ? "\(Int((distance / 10).rounded()) * 10) m" : String(format: "%.1f km", distance / 1000)
+        }
+        var distanceSpoken: String {
+            distance < 1000 ? "\(Int((distance / 10).rounded()) * 10) metres" : String(format: "%.1f kilometres", distance / 1000)
+        }
+    }
+    /// The tram, metro and train stops within `nearbyRadius`, nearest first.
+    @Published private(set) var nearby: [NearbyStop] = []
+    @Published private(set) var isLoadingNearby = false
+    private let nearbyRadius: Double = 1000
+    private let nearbyLimit = 20
+
+    /// The stops near the user's last known position, then each one's lines.
+    func loadNearby() async {
+        guard nearby.isEmpty, let here = CLLocationManager().location?.coordinate else { return }
+        isLoadingNearby = true
+        defer { isLoadingNearby = false }
+        guard let found = await Transit.stops(near: here, within: nearbyRadius) else { return }
+        nearby = found.prefix(nearbyLimit).map { NearbyStop(stop: $0.stop, distance: $0.distance, modes: $0.modes) }
+        // The lines, all at once; each row shows its own as it comes in.
+        await withTaskGroup(of: (String, [Transit.Departure]?).self) { group in
+            for stop in nearby {
+                let id = stop.id
+                group.addTask { (id, await Transit.departures(from: id)) }
+            }
+            for await (id, departures) in group {
+                guard let departures, let index = nearby.firstIndex(where: { $0.id == id }) else { continue }
+                nearby[index].lines = Transit.lines(of: departures)
+            }
+        }
+    }
 
     private let completer = MKLocalSearchCompleter()
     /// Results near here come first: the user's last known position, or Amsterdam.

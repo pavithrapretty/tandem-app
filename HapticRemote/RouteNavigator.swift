@@ -149,6 +149,35 @@ final class RouteNavigator: NSObject, ObservableObject {
     /// The user's spot on the route at the last fix, in metres from its start.
     /// Smoothed: see `smoothAlong`.
     private var lastAlong: Double?
+    /// How far to the side of the route the user is, smoothed over a few
+    /// fixes: positive to its left, negative to its right, in metres.
+    private var lateral: Double = 0
+    /// Metres walked along the route while well to its side (a parallel
+    /// street): enough of it, and a new route is fetched (`parallelWalk`).
+    private var parallelWalked: Double = 0
+    /// Further to the side than this (fully at `lateralFull`), the pointer aims
+    /// from where the user is back to the route ahead, not along it. Real
+    /// walks: 5–12 m beside the route's line is normal (it runs down the
+    /// middle of the road; the user walks a pavement, a quay, a path beside
+    /// it), and up to 15–20 m on wide streets and quays.
+    private let lateralStart: Double = 18
+    private let lateralFull: Double = 30
+    /// When the pointer aims back to the route: at least this far along it.
+    private let lateralAim: Double = 12
+    /// Well to the side of the route, as in a parallel street: this far off,
+    /// with a fix sure enough of it, for `parallelWalk` metres in a row.
+    private let parallelDistance: Double = 25
+    private let parallelWalk: Double = 40
+    /// Back closer than this, it was only drift.
+    private let parallelBack: Double = 15
+    /// Neither of those this close before a turn, or after it: cutting the
+    /// corner takes the user off the line for a moment.
+    private let lateralTurnBefore: Double = 30
+    private let lateralTurnAfter: Double = 15
+    /// On a straight stretch, the pointer aims this far ahead, so it doesn't
+    /// swing with every small bend in the line. Before a turn it aims at the
+    /// corner, and swings into the next street `lookAhead` before it.
+    private let straightAim: Double = 15
     /// How unsure `lastAlong` is: its variance, in square metres.
     private var alongVariance: Double = 0
     /// When the fix behind `lastAlong` was taken.
@@ -359,6 +388,8 @@ final class RouteNavigator: NSObject, ObservableObject {
         announcedTurn = nil
         // Find the spot on the route afresh, anywhere along it.
         lastAlong = nil
+        lateral = 0
+        parallelWalked = 0
         recorder?.event("recalibrate")
         guard !isSimulated, !isReplay else { return }
         locationManager.stopUpdatingLocation()
@@ -436,6 +467,8 @@ final class RouteNavigator: NSObject, ObservableObject {
             "signalLost": signalIsLost,
         ]
         if let lastAlong { fields["along"] = lastAlong }
+        fields["lateral"] = lateral
+        fields["parallelWalked"] = parallelWalked
         if let bearingAhead { fields["bearingAhead"] = bearingAhead }
         if let heading { fields["heading"] = heading }
         if let stepSpeed = currentStepSpeed { fields["stepSpeed"] = stepSpeed }
@@ -476,8 +509,14 @@ final class RouteNavigator: NSObject, ObservableObject {
         let offRoute = offRouteLimit(location)
         var point = route.project(location.coordinate, within: lastAlong.map { ($0 - 40)...($0 + 80) })
         if point.offset > offRoute { point = route.project(location.coordinate) }
-        // Coasting, the spot is already the steps' guess.
-        if !isCoasting { point.along = smoothAlong(point.along, location: location, route: route) }
+        let previousAlong = lastAlong
+        // Coasting, the spot is already the steps' guess, on the route.
+        if !isCoasting {
+            point.along = smoothAlong(point.along, location: location, route: route)
+            // A sure fix moves the side more than a rough one.
+            let gain = min(0.6, 10 / (location.horizontalAccuracy + 10))
+            lateral += (point.lateral - lateral) * gain
+        }
 
         remaining = max(0, route.length - point.along)
         progress = route.length > 0 ? min(1, point.along / route.length) : 1
@@ -502,6 +541,21 @@ final class RouteNavigator: NSObject, ObservableObject {
             return
         }
         offRouteCount = 0
+
+        // A parallel street: walking on beside the route, too far to the side
+        // for drift, and the fix sure of it. Short of the reroute distance, so
+        // it needs walking a while: then the route is fetched afresh from here.
+        if !isCoasting, abs(lateral) > parallelDistance, location.horizontalAccuracy < abs(lateral),
+           !isNearTurn(on: route, at: point.along) {
+            parallelWalked += abs(point.along - (previousAlong ?? point.along))
+            if parallelWalked >= parallelWalk {
+                parallelWalked = 0
+                recorder?.event("parallelStreet")
+                reroute(from: location.coordinate)
+            }
+        } else if abs(lateral) < parallelBack {
+            parallelWalked = 0
+        }
 
         // Wrong way: walking against the route for a few fixes in a row.
         if location.speed > 0.6, location.course >= 0, (0...60).contains(location.courseAccuracy) {
@@ -567,11 +621,13 @@ final class RouteNavigator: NSObject, ObservableObject {
 
         // Walking speed along the route: forwards, backwards or across it.
         // How fast from the step counter if it knows, else from the GPS; which
-        // way from the GPS's course if it is sure of it, else forwards.
+        // way from the GPS's course if it is sure of it, else the compass (on
+        // real walks within 5–8° of the way walked, while the GPS's course
+        // was mostly 20–50° unsure), else forwards. Without that, walking on
+        // past a turn carried the user's spot round the corner with the steps.
         let courseIsGood = location.course >= 0 && (0...45).contains(location.courseAccuracy)
-        let along = courseIsGood
-            ? cos(signedAngle(from: route.bearing(at: lastAlong), to: location.course) * .pi / 180)
-            : 1
+        let along = alongFactor(route: route, at: lastAlong,
+                                course: courseIsGood ? location.course : nil)
         let steps = currentStepSpeed
         var velocity = 0.0
         if let steps {
@@ -600,15 +656,44 @@ final class RouteNavigator: NSObject, ObservableObject {
         return min(max(predicted + gain * (measured - predicted), 0), route.length)
     }
 
+    /// How much of the user's walking goes along the route at `along`: 1
+    /// straight along it, 0 across it, negative back along it. From the GPS's
+    /// course if given, else the compass, else 1.
+    private func alongFactor(route: Route, at along: Double, course: Double?) -> Double {
+        guard let way = course ?? heading else { return 1 }
+        return cos(signedAngle(from: route.bearing(at: along), to: way) * .pi / 180)
+    }
+
     /// Measured from the user's spot on the route, not their GPS position: a
     /// few metres ahead, a GPS position a few metres to the side would swing
-    /// it right round.
+    /// it right round. But well to the side (a parallel street, a turn taken
+    /// too early), from where the user is, back to the route further ahead:
+    /// so it points them back to it rather than along a street beside it.
     private func updateBearingAhead(on route: Route, from along: Double) {
+        // Only once a fix is sure enough of it: a rough one can sit metres to the side.
+        let isSure = (lastLocation?.horizontalAccuracy ?? .infinity) < abs(lateral)
+            && !isNearTurn(on: route, at: along)
+        let side = isSure ? min(1, max(0, (abs(lateral) - lateralStart) / (lateralFull - lateralStart))) : 0
         let here = route.coordinate(at: along)
-        let ahead = route.coordinate(at: along + lookAhead)
-        if distance(here, ahead) > 0.5 {
-            bearingAhead = initialBearing(here, ahead)
+        // Straight on: well ahead. A turn coming: its corner, until `lookAhead`
+        // before it, then on into the next street.
+        var aim = along + max(lookAhead, straightAim)
+        if let turn = route.turns.first(where: { $0.along > along }), turn.along <= aim {
+            aim = turn.along - along > lookAhead ? turn.along : along + lookAhead
         }
+        let ahead = route.coordinate(at: side > 0 ? max(aim, along + lateralAim) : aim)
+        // Where the user is: off the route to its left (positive) or right.
+        let user = side > 0
+            ? moved(here, by: lateral * side, towards: route.bearing(at: along) - 90)
+            : here
+        if distance(user, ahead) > 0.5 {
+            bearingAhead = initialBearing(user, ahead)
+        }
+    }
+
+    /// Within `lateralTurnBefore` before a turn or `lateralTurnAfter` after it.
+    private func isNearTurn(on route: Route, at along: Double) -> Bool {
+        route.turns.contains { $0.along - along < lateralTurnBefore && along - $0.along < lateralTurnAfter }
     }
 
     /// A new look-ahead from the settings: the pointer (and, with the
@@ -629,8 +714,8 @@ final class RouteNavigator: NSObject, ObservableObject {
     }
 
     /// Without a usable fix for a moment (between tall buildings, say), the
-    /// steps carry the user on along the route, forwards, at the step
-    /// counter's speed: the turns still come at about the right spot. Not
+    /// steps carry the user on along the route, as far as the way they face
+    /// goes along it, at the step counter's speed: the turns still come at about the right spot. Not
     /// for longer than `coastLimit`, nor while the counter says nothing.
     private func coast() {
         guard status == .guiding, pattern != .arrived, !isSimulated, let route, let lastAlong,
@@ -638,7 +723,9 @@ final class RouteNavigator: NSObject, ObservableObject {
         let sinceFix = Date.now.timeIntervalSince(lastUsableFix)
         guard sinceFix > 1.5, sinceFix <= coastLimit else { return }
         let seconds = min(max(Date.now.timeIntervalSince(lastFixTime), 0), 2)
-        let along = min(lastAlong + speed * seconds, route.length)
+        // Only as far as the way they face goes along the route.
+        let factor = max(0, alongFactor(route: route, at: lastAlong, course: nil))
+        let along = min(lastAlong + speed * factor * seconds, route.length)
         self.lastFixTime = .now
         alongVariance += pow(stepNoise, 2) * seconds
         // A made-up fix on the route there, about as sure as the guess.
@@ -748,8 +835,11 @@ final class RouteNavigator: NSObject, ObservableObject {
     private func install(_ newRoute: Route, line: MKPolyline) {
         let isFirst = route == nil
         route = newRoute
-        recorder?.route(newRoute.points, turns: newRoute.turns, reason: isFirst ? "first" : "reroute")
+        recorder?.route(newRoute.points, turns: newRoute.turns, steps: newRoute.steps,
+                        reason: isFirst ? "first" : "reroute")
         lastAlong = nil
+        lateral = 0
+        parallelWalked = 0
         routeLine = line
         announcedTurn = nil
         wrongWayCount = 0
@@ -770,7 +860,7 @@ final class RouteNavigator: NSObject, ObservableObject {
     private func fetchRoute(from start: CLLocationCoordinate2D) {
         // Replaying: the walk's own first route, so it starts as it was.
         if let recorded = replay?.firstRoute, route == nil, recorded.points.count > 1 {
-            install(Route(points: recorded.points, turns: recorded.turns),
+            install(Route(points: recorded.points, turns: recorded.turns, steps: recorded.steps),
                     line: MKPolyline(coordinates: recorded.points, count: recorded.points.count))
             return
         }
@@ -857,8 +947,10 @@ private struct Route {
     /// Bends sharper than this count as a turn (degrees).
     private static let turnAngle: Double = 35
 
-    /// A recorded route (TripReplay), as it was.
-    init(points: [CLLocationCoordinate2D], turns: [Turn]) {
+    /// A recorded route (TripReplay): its turns found afresh from its steps,
+    /// or, recorded before the steps were, as they were.
+    init(points: [CLLocationCoordinate2D], turns: [Turn],
+         steps: [(coordinate: CLLocationCoordinate2D, instructions: String)] = []) {
         self.points = points
         var distances: [Double] = [0]
         for i in 1..<max(1, points.count) {
@@ -866,6 +958,8 @@ private struct Route {
         }
         cumulative = distances
         self.turns = turns
+        self.steps = steps
+        if !steps.isEmpty { self.turns = findTurns() }
     }
 
     init(_ route: MKRoute) {
@@ -882,20 +976,72 @@ private struct Route {
         cumulative = distances
 
         turns = []
-        // Each MapKit step after the first starts at a manoeuvre. Its direction
-        // comes from the bend in the line there: the bearing just before and after.
-        var found: [Turn] = []
-        for step in route.steps.dropFirst() where step.polyline.pointCount > 0 {
-            let start = Self.start(of: step.polyline)
-            let along = project(start).along
-            guard along > 1, along < length - 1 else { continue }
-            let bend = signedAngle(from: bearing(at: along - 8), to: bearing(at: along + 8))
-            if abs(bend) >= Self.turnAngle {
-                found.append(Turn(coordinate: start, instructions: step.instructions,
-                                  isLeft: bend < 0, along: along))
-            }
+        steps = route.steps.dropFirst().compactMap { step in
+            step.polyline.pointCount > 0 ? (Self.start(of: step.polyline), step.instructions) : nil
         }
-        turns = found
+        turns = findTurns()
+    }
+
+    /// The MapKit steps after the first: where each starts, and what to do there.
+    /// Kept for the recording.
+    private(set) var steps: [(coordinate: CLLocationCoordinate2D, instructions: String)] = []
+
+    /// Bends sharper than `turnAngle` near the steps' starts. Measured over
+    /// `bendChord` either side, so a small wiggle in the line isn't one.
+    /// A step's start isn't always at its bend: real walks had "Bear right"
+    /// placed 17 m on, on a curve to the left, and "Turn right" and "Take the
+    /// stairs on the left" each on the other one's bend. So an instruction
+    /// that says which way is put on the nearest bend that way, within
+    /// `bendSearch`; one that doesn't say, only on a bend right at its start.
+    private static let bendChord: Double = 15
+    private static let bendSearch: Double = 25
+    private static let bendSearchUnsaid: Double = 8
+    /// A turn this close to the start is only the way from where the user
+    /// stands onto the street (a new route starts at them): not signalled.
+    /// The pointer, aiming ahead, takes them there anyway.
+    private static let startStub: Double = 15
+
+    private func findTurns() -> [Turn] {
+        var found: [Turn] = []
+        for step in steps {
+            let start = project(step.coordinate).along
+            guard start > 1, start < length - 1 else { continue }
+            let said = Self.side(in: step.instructions)
+            let search = said == nil ? Self.bendSearchUnsaid : Self.bendSearch
+            // The sharpest bend the right way, nearer the start counting for more.
+            var best: (score: Double, along: Double, bend: Double)?
+            var along = max(1, start - search)
+            while along <= min(length - 1, start + search) {
+                let bend = self.bend(at: along)
+                if said == nil || (bend < 0) == said {
+                    let score = abs(bend) - abs(along - start)
+                    if score > best?.score ?? -.infinity { best = (score, along, bend) }
+                }
+                along += 1
+            }
+            guard let best, abs(best.bend) >= Self.turnAngle, best.along > Self.startStub,
+                  // Not a bend another step has already taken.
+                  !found.contains(where: { abs($0.along - best.along) < Self.bendSearchUnsaid }) else { continue }
+            found.append(Turn(coordinate: coordinate(at: best.along), instructions: step.instructions,
+                              isLeft: best.bend < 0, along: best.along))
+        }
+        return found.sorted { $0.along < $1.along }
+    }
+
+    /// How much the line turns at `along`: the way in over `bendChord` before
+    /// it to the way out over `bendChord` after it, negative to the left.
+    private func bend(at along: Double) -> Double {
+        let here = coordinate(at: along)
+        return signedAngle(from: initialBearing(coordinate(at: along - Self.bendChord), here),
+                           to: initialBearing(here, coordinate(at: along + Self.bendChord)))
+    }
+
+    /// Left (true) or right (false) if the instruction says only one of them.
+    private static func side(in instructions: String) -> Bool? {
+        let text = instructions.lowercased()
+        let left = text.contains("left") || text.contains("links")
+        let right = text.contains("right") || text.contains("rechts")
+        return left == right ? nil : left
     }
 
     private static func start(of polyline: MKPolyline) -> CLLocationCoordinate2D {
@@ -906,15 +1052,21 @@ private struct Route {
 
     /// The closest point on the route: how far along it is, and how far away.
     /// With `range`, only the part of the route that many metres from its start.
+    /// `lateral`: the same distance, positive when the point is to the
+    /// route's left (seen walking along it), negative to its right.
     func project(_ coordinate: CLLocationCoordinate2D,
-                 within range: ClosedRange<Double>? = nil) -> (along: Double, offset: Double) {
-        guard points.count > 1 else { return (0, distance(coordinate, points.first ?? coordinate)) }
-        var best = (along: 0.0, offset: Double.greatestFiniteMagnitude)
+                 within range: ClosedRange<Double>? = nil) -> (along: Double, offset: Double, lateral: Double) {
+        guard points.count > 1 else {
+            let offset = distance(coordinate, points.first ?? coordinate)
+            return (0, offset, 0)
+        }
+        var best = (along: 0.0, offset: Double.greatestFiniteMagnitude, lateral: 0.0)
         for i in 1..<points.count {
             if let range, cumulative[i] < range.lowerBound || cumulative[i - 1] > range.upperBound { continue }
-            let (fraction, offset) = projectOnSegment(coordinate, points[i - 1], points[i])
+            let (fraction, offset, isLeft) = projectOnSegment(coordinate, points[i - 1], points[i])
             if offset < best.offset {
-                best = (cumulative[i - 1] + fraction * (cumulative[i] - cumulative[i - 1]), offset)
+                best = (cumulative[i - 1] + fraction * (cumulative[i] - cumulative[i - 1]), offset,
+                        isLeft ? offset : -offset)
             }
         }
         return best
@@ -948,9 +1100,10 @@ private func distance(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) 
         .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
 }
 
-/// Projects `p` on the segment a–b: the fraction along it (0 to 1) and the distance in metres.
+/// Projects `p` on the segment a–b: the fraction along it (0 to 1), the
+/// distance in metres, and whether `p` lies to its left (going from a to b).
 private func projectOnSegment(_ p: CLLocationCoordinate2D, _ a: CLLocationCoordinate2D,
-                              _ b: CLLocationCoordinate2D) -> (Double, Double) {
+                              _ b: CLLocationCoordinate2D) -> (Double, Double, Bool) {
     let metresPerDegree = 111_320.0
     let scale = cos(a.latitude * .pi / 180)
     let bx = (b.longitude - a.longitude) * metresPerDegree * scale
@@ -960,7 +1113,19 @@ private func projectOnSegment(_ p: CLLocationCoordinate2D, _ a: CLLocationCoordi
     let lengthSquared = bx * bx + by * by
     let t = lengthSquared > 0 ? min(1, max(0, (px * bx + py * by) / lengthSquared)) : 0
     let dx = px - t * bx, dy = py - t * by
-    return (t, (dx * dx + dy * dy).squareRoot())
+    // x east, y north: positive cross product is to the left of a→b.
+    return (t, (dx * dx + dy * dy).squareRoot(), bx * py - by * px > 0)
+}
+
+/// `start` moved `metres` towards `bearing` (degrees from north).
+private func moved(_ start: CLLocationCoordinate2D, by metres: Double,
+                   towards bearing: Double) -> CLLocationCoordinate2D {
+    let radians = bearing * .pi / 180
+    let metresPerDegree = 111_320.0
+    return CLLocationCoordinate2D(
+        latitude: start.latitude + metres * cos(radians) / metresPerDegree,
+        longitude: start.longitude + metres * sin(radians)
+            / (metresPerDegree * cos(start.latitude * .pi / 180)))
 }
 
 private func initialBearing(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {

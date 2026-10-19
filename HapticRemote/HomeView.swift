@@ -36,7 +36,7 @@ struct HomeView: View {
     /// or the nearest stop. Nil while the nearest stop is still being found.
     private var selected: Destination? { picked ?? nearestStop.found }
     /// The lines that stop at the selected place, if it is a stop: "Tram 7, 12".
-    @State private var lines: (short: String, spoken: String)?
+    @State private var lines: Transit.Lines?
     /// Set by tapping the lavender card, which opens the navigation screens.
     @State private var navigatingTo: Destination?
     /// The search sheet, open on the typed search or (the microphone button)
@@ -289,7 +289,7 @@ struct HomeView: View {
     private var chips: some View {
         // Only for a stop, once its lines are in.
         if let lines {
-            chip(icon: "icon-train", text: lines.short)
+            lineChip(lines)
         }
         chip(icon: "icon-walk", text: walkingTime.short)
     }
@@ -309,6 +309,17 @@ struct HomeView: View {
         let spokenHours = hours == 1 ? "1 hour" : "\(hours) hours"
         return (rest == 0 ? "\(hours) h" : "\(hours) h \(rest) min",
                 rest == 0 ? "\(spokenHours) walk" : "\(spokenHours) \(rest) minutes walk")
+    }
+
+    /// The lines as badges in their own colours, on the lavender card.
+    private func lineChip(_ lines: Transit.Lines) -> some View {
+        HStack(spacing: 8) {
+            Image("icon-train")
+            LineBadges(lines: lines, textColor: Palette.onAccent, badgeColor: Palette.onAccent.opacity(0.12))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Palette.onAccent.opacity(0.1), in: RoundedRectangle(cornerRadius: 18))
     }
 
     private func chip(icon: String, text: String) -> some View {
@@ -340,7 +351,7 @@ struct HomeView: View {
                                                                lineJoin: .round))
             }
             if let selected {
-                Marker(selected.name, systemImage: selected.isStop ? "tram.fill" : "mappin",
+                Marker(selected.name, systemImage: selected.symbol,
                        coordinate: selected.coordinate)
                     .tint(Palette.accent)
             }

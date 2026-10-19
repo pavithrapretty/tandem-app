@@ -30,6 +30,15 @@ struct Destination: Identifiable {
     /// The stop in Transit, when it was found there. Without it, a stop's
     /// departures are those of the Transit stop at the same spot.
     var transitStopID: String?
+    /// Which of the stop's lines it is about: only its buses for a bus stop
+    /// asked for by voice. Nil: its trams, metros and trains.
+    var transitModes: Set<Transit.Mode>?
+
+    /// Its pin on the maps: a tram for a stop (a bus for a bus stop), else a pin.
+    var symbol: String {
+        guard isStop else { return "mappin" }
+        return transitModes == [.bus] ? "bus.fill" : "tram.fill"
+    }
 
     static let centraal = Destination(name: "Centraal", subtitle: "Centraal tram stop",
                                       coordinate: Places.centraal, isStop: true)
