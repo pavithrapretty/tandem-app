@@ -144,7 +144,7 @@ final class SpeechListener: ObservableObject {
                 return
             }
             do {
-                try startAudio()
+                try await startAudio()
                 // The chime first, and only then the microphone, so it isn't heard as speech.
                 await play(Self.listeningChime)
                 guard !Task.isCancelled else { return }
@@ -201,14 +201,21 @@ final class SpeechListener: ObservableObject {
 
     /// The audio session and engine, for both the microphone and the chimes:
     /// play and record, out of the loudspeaker (not the earpiece), and not
-    /// muted by the silent switch.
-    private func startAudio() throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers, .defaultToSpeaker])
-        // iOS silences vibrations while recording; the speech taps need them.
-        try session.setAllowHapticsAndSystemSoundsDuringRecording(true)
-        try session.setActive(true, options: .notifyOthersOnDeactivation)
-        guard session.isInputAvailable else { throw CocoaError(.featureUnsupported) }
+    /// muted by the silent switch. With AirPods (or another headset) in:
+    /// their microphone and the chimes in them, not the iPhone's.
+    private func startAudio() async throws {
+        // On before the wait: a `stop()` meanwhile switches it off again.
+        audioIsOn = true
+        let hasMicrophone = try await AudioSessionQueue.run { session in
+            try session.setCategory(.playAndRecord, mode: .default,
+                                    options: [.duckOthers, .defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP])
+            // iOS silences vibrations while recording; the speech taps need them.
+            try session.setAllowHapticsAndSystemSoundsDuringRecording(true)
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
+            return session.isInputAvailable
+        }
+        try Task.checkCancellation()
+        guard hasMicrophone else { throw CocoaError(.featureUnsupported) }
 
         if chimePlayer.engine == nil {
             engine.attach(chimePlayer)
@@ -218,7 +225,6 @@ final class SpeechListener: ObservableObject {
         _ = engine.inputNode
         engine.prepare()
         try engine.start()
-        audioIsOn = true
     }
 
     private func stopAudio() {
@@ -226,7 +232,7 @@ final class SpeechListener: ObservableObject {
         if engine.isRunning { engine.stop() }
         if audioIsOn {
             audioIsOn = false
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            AudioSessionQueue.deactivate()
         }
     }
 

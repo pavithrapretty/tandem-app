@@ -11,9 +11,12 @@ import SwiftUI
 /// The frame of a tutorial screen: dark background, 24 pt side margins, and
 /// content that fills the screen but scrolls when the text is very large.
 /// `tint` washes the background faintly in a colour (the signal screens use
-/// the colour of the signal).
+/// the colour of the signal). `toBottomEdge`: the content runs down past the
+/// home indicator to 16 pt from the screen's edge, the same as the side
+/// margins, like the cards in Apple's own apps (the home screen's map).
 struct TutorialPage<Content: View>: View {
     var tint: Color? = nil
+    var toBottomEdge = false
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -24,13 +27,15 @@ struct TutorialPage<Content: View>: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
-                .padding(.bottom, 10)
+                .padding(.bottom, toBottomEdge ? 16 : 10)
                 // At least as tall as the screen, so spacers can push the
                 // button to the bottom.
                 .frame(minHeight: proxy.size.height)
             }
             .scrollBounceBehavior(.basedOnSize)
         }
+        // Only the home indicator's area; the keyboard still pushes it up.
+        .ignoresSafeArea(.container, edges: toBottomEdge ? .bottom : [])
         .background { TutorialBackground(tint: tint) }
     }
 }
@@ -109,8 +114,9 @@ struct PrimaryButton: View {
                 .foregroundStyle(Palette.onAccent)
                 .frame(maxWidth: .infinity, minHeight: 64)
                 // 80% lavender, so the Liquid Glass shows through. Solid before iOS 26.
+                // At the bottom of a screen, its corners follow the screen's.
                 .glassButtonBackground(tint: Palette.accent.opacity(0.8), fallback: Palette.accent,
-                                       in: RoundedRectangle(cornerRadius: 20))
+                                       in: screenConcentricRectangle(20))
         }
         .buttonStyle(.plain)
     }

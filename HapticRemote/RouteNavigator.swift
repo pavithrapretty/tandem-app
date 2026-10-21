@@ -39,6 +39,7 @@ import Combine
 import CoreLocation
 import CoreMotion
 import MapKit
+import Network
 
 @MainActor
 final class RouteNavigator: NSObject, ObservableObject {
@@ -48,10 +49,45 @@ final class RouteNavigator: NSObject, ObservableObject {
         /// Asking MapKit for the route.
         case routing
         case guiding
-        case failed(String)
+        case failed(Problem)
+    }
+
+    /// Why there is no route, or no new one.
+    enum Problem: Equatable {
+        /// Location Services are off for the app.
+        case locationOff
+        /// Approximate Location only (`needsPreciseLocation`).
+        case preciseLocationOff
+        /// No internet, so Apple Maps can't be asked.
+        case noConnection
+        /// Apple Maps knows no way to walk there.
+        case noWalkingRoute
+        /// Apple Maps didn't answer for another reason (busy, a server error).
+        case mapsUnavailable
+
+        /// Try again makes sense: the same request may work in a moment.
+        var canRetry: Bool { self == .noConnection || self == .mapsUnavailable || self == .noWalkingRoute }
+        /// Fixed in the Settings app.
+        var needsSettings: Bool { self == .locationOff || self == .preciseLocationOff }
+    }
+
+    /// Something to tell the user while there is no direction to give, or
+    /// the one given may be stale. Nil when all is well.
+    enum Notice: Equatable {
+        /// Still no usable GPS fix `locatingPatience` seconds after starting.
+        case noLocationYet
+        /// More than the reroute distance from the route: a new route is on its way.
+        case offRoute
+        /// Off the route, and the new route failed (`.noConnection`,
+        /// `.noWalkingRoute` or `.mapsUnavailable`). Tried again every
+        /// `rerouteInterval` seconds.
+        case offRouteNoNewRoute(Problem)
     }
 
     @Published private(set) var status: Status = .locating
+    @Published private(set) var notice: Notice?
+    /// Set (to a new value) each time a reroute brings a new route, to say so.
+    @Published private(set) var reroutedAt: Date?
     /// The signal that fits right now. Nil until there is a route.
     @Published private(set) var pattern: Pattern? {
         didSet { if pattern != oldValue { recorder?.pattern(pattern) } }
@@ -65,6 +101,11 @@ final class RouteNavigator: NSObject, ObservableObject {
     /// How much of the route is done, 0 to 1.
     @Published private(set) var progress: Double = 0
     @Published private(set) var lastLocation: CLLocation?
+    /// Where to show the user on the map: on the route line at their spot
+    /// along it while they are on the route (walking the pavement beside the
+    /// road's line, say), like Apple Maps; their GPS position once they are
+    /// clearly off it. Nil until there is a route.
+    @Published private(set) var shownCoordinate: CLLocationCoordinate2D?
     /// The turn being signalled, or else the next one ahead. Nil when no
     /// turns are left before the destination.
     @Published private(set) var nextTurn: Turn?
@@ -134,6 +175,8 @@ final class RouteNavigator: NSObject, ObservableObject {
     private let signalAccuracy: Double = 100
     /// Seconds without any fix within `signalAccuracy` before "Signal lost".
     private let signalTimeout: TimeInterval = 15
+    /// Seconds without a first usable fix before "No GPS signal" is shown.
+    private let locatingPatience: TimeInterval = 20
     /// Walking speed for the time left, in metres per second.
     private let walkingSpeed: Double = 1.3
     /// How far ahead on the route the dial's pointer aims, in metres. Set in
@@ -172,6 +215,9 @@ final class RouteNavigator: NSObject, ObservableObject {
     private let parallelWalk: Double = 40
     /// Back closer than this, it was only drift.
     private let parallelBack: Double = 15
+    /// Within this of the route's line, the map shows the user on it
+    /// (`shownCoordinate`): real walks were 5–12 m beside it, up to ~18 m on quays.
+    private let snapDistance: Double = 20
     /// Neither of those this close before a turn, or after it: cutting the
     /// corner takes the user off the line for a moment.
     private let lateralTurnBefore: Double = 30
@@ -241,6 +287,14 @@ final class RouteNavigator: NSObject, ObservableObject {
     /// When the last fix good enough to follow the route by came in.
     private var lastUsableFix: Date = .now
     private var signalTimer: Timer?
+    #if DEBUG
+    /// An Xcode preview's navigator (`preview`): it never starts.
+    fileprivate var isPreview = false
+    #endif
+    /// When `start` was called, for `locatingPatience`.
+    private var startedAt: Date = .now
+    /// Whether there is internet, to tell a missing connection from other failures.
+    private let network = NWPathMonitor()
     /// What the route alone says (turns, wrong way, almost there, arrived).
     private var routePattern: Pattern?
     private var signalIsLost = false
@@ -268,9 +322,15 @@ final class RouteNavigator: NSObject, ObservableObject {
         // distance filter, standing still to turn on the spot sends nothing,
         // which looked like a lost signal.
         locationManager.distanceFilter = kCLDistanceFilterNone
+        network.start(queue: .global(qos: .utility))
     }
 
+    deinit { network.cancel() }
+
     func start() {
+        #if DEBUG
+        guard !isPreview else { return }
+        #endif
         if let replay {
             replay.onFix = { [weak self] in self?.handleGPS($0) }
             replay.onSteps = { [weak self] in self?.handleSteps(distance: $0, pace: $1, at: .now) }
@@ -283,11 +343,11 @@ final class RouteNavigator: NSObject, ObservableObject {
         case .notDetermined:
             locationManager.requestWhenInUseAuthorization()
         case .denied, .restricted:
-            status = .failed("Location is off for Tandem. Turn it on in Settings, Privacy, Location Services.")
+            status = .failed(.locationOff)
             return
         default:
             guard !needsPreciseLocation else {
-                status = .failed(Self.preciseLocationMessage)
+                status = .failed(.preciseLocationOff)
                 return
             }
         }
@@ -297,6 +357,7 @@ final class RouteNavigator: NSObject, ObservableObject {
     }
 
     private func startTimer() {
+        startedAt = .now
         lastGoodFix = .now
         lastUsableFix = .now
         signalTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -365,8 +426,19 @@ final class RouteNavigator: NSObject, ObservableObject {
     private var needsPreciseLocation: Bool {
         !isSimulated && !isReplay && locationManager.accuracyAuthorization == .reducedAccuracy
     }
-    private static let preciseLocationMessage =
-        "Precise Location is off for Tandem. Turn it on in Settings, Privacy, Location Services, Tandem."
+
+    /// Try again, from a failed screen: starts over from finding the user.
+    func retry() {
+        guard case .failed = status else { return }
+        stop()
+        route = nil
+        routeLine = nil
+        pattern = nil
+        routePattern = nil
+        notice = nil
+        status = .locating
+        start()
+    }
 
     func stop() {
         replay?.stop()
@@ -538,11 +610,17 @@ final class RouteNavigator: NSObject, ObservableObject {
         }
 
         if point.offset > offRoute {
+            shownCoordinate = location.coordinate
             offRouteCount += 1
-            if offRouteCount >= offRouteFixes { reroute(from: location.coordinate) }
+            if offRouteCount >= offRouteFixes {
+                if notice == nil || notice == .noLocationYet { notice = .offRoute }
+                reroute(from: location.coordinate)
+            }
             return
         }
         offRouteCount = 0
+        // Back on the route by walking: the old route will do.
+        if notice != nil { notice = nil }
 
         // A parallel street: walking on beside the route, too far to the side
         // for drift, and the fix sure of it. Short of the reroute distance, so
@@ -583,6 +661,9 @@ final class RouteNavigator: NSObject, ObservableObject {
         self.nextTurn = announcedTurn.flatMap { $0 < route.turns.count ? route.turns[$0] : nil } ?? nextTurn
         lastAlong = point.along
         updateBearingAhead(on: route, from: point.along)
+        shownCoordinate = abs(lateral) <= snapDistance && parallelWalked == 0
+            ? route.coordinate(at: point.along)
+            : location.coordinate
 
         // Closer to the turn (or the destination, after the last turn): faster.
         let closeness = 1 - min(1, max(0, distanceToNext / rampDistance))
@@ -741,6 +822,10 @@ final class RouteNavigator: NSObject, ObservableObject {
     }
 
     private func checkSignal() {
+        if status == .locating, notice == nil, !isSimulated, !isReplay,
+           Date.now.timeIntervalSince(startedAt) > locatingPatience {
+            notice = .noLocationYet
+        }
         guard status == .guiding, pattern != .arrived, !isSimulated else { return }
         if Date.now.timeIntervalSince(lastGoodFix) > signalTimeout {
             if !signalIsLost { recorder?.event("signalLost") }
@@ -846,6 +931,8 @@ final class RouteNavigator: NSObject, ObservableObject {
         announcedTurn = nil
         wrongWayCount = 0
         offRouteCount = 0
+        notice = nil
+        if !isFirst { reroutedAt = .now }
         status = .guiding
         if isSimulated { locationManager.stopUpdatingLocation() }
         // From here on, only the Forward and Back buttons (or the
@@ -867,7 +954,10 @@ final class RouteNavigator: NSObject, ObservableObject {
             return
         }
         isRerouting = true
-        if route == nil { status = .routing }
+        if route == nil {
+            status = .routing
+            notice = nil
+        }
 
         let request = MKDirections.Request()
         request.source = MKMapItem(placemark: MKPlacemark(coordinate: start))
@@ -881,13 +971,57 @@ final class RouteNavigator: NSObject, ObservableObject {
                 if let mkRoute = response?.routes.first {
                     self.install(Route(mkRoute), line: mkRoute.polyline)
                 } else if self.route == nil {
-                    // A failed reroute keeps the old route; a failed first route ends here.
-                    self.status = .failed(error?.localizedDescription
-                                          ?? "No walking route found. Check the internet connection.")
+                    // A failed first route ends here, until Try again.
+                    self.status = .failed(self.problem(for: error))
                     self.stop()
+                } else if self.notice == .offRoute || self.notice?.isOffRouteNoNewRoute == true {
+                    // A failed reroute keeps the old route, and is tried
+                    // again on the next fix off it.
+                    self.notice = .offRouteNoNewRoute(self.problem(for: error))
                 }
             }
         }
+    }
+}
+
+extension RouteNavigator {
+    /// What went wrong asking Apple Maps for a route.
+    fileprivate func problem(for error: Error?) -> Problem {
+        if let error = error as? MKError,
+           error.code == .directionsNotFound || error.code == .placemarkNotFound {
+            return .noWalkingRoute
+        }
+        if network.currentPath.status != .satisfied || (error as? NSError)?.domain == NSURLErrorDomain {
+            return .noConnection
+        }
+        return error == nil ? .noWalkingRoute : .mapsUnavailable
+    }
+}
+
+#if DEBUG
+extension RouteNavigator {
+    /// For Xcode previews: a navigator frozen in one state, which `start`
+    /// leaves alone. `pattern` and the distances only count while guiding.
+    static func preview(_ status: Status, notice: Notice? = nil, pattern: Pattern? = nil,
+                        remaining: Double = 640, toNext: Double = 120) -> RouteNavigator {
+        let navigator = RouteNavigator(destination: Destination.centraal.coordinate)
+        navigator.isPreview = true
+        navigator.status = status
+        navigator.notice = notice
+        if status == .guiding {
+            navigator.pattern = pattern ?? .forward
+            navigator.remaining = remaining
+            navigator.distanceToNext = toNext
+            navigator.progress = 0.4
+        }
+        return navigator
+    }
+}
+#endif
+
+extension RouteNavigator.Notice {
+    var isOffRouteNoNewRoute: Bool {
+        if case .offRouteNoNewRoute = self { true } else { false }
     }
 }
 
@@ -903,11 +1037,14 @@ extension RouteNavigator: CLLocationManagerDelegate {
             // Replaying doesn't use the GPS.
             guard !self.isReplay else { return }
             if status == .denied || status == .restricted {
-                self.status = .failed("Location is off for Tandem. Turn it on in Settings, Privacy, Location Services.")
+                self.status = .failed(.locationOff)
                 self.stop()
             } else if self.needsPreciseLocation {
-                self.status = .failed(Self.preciseLocationMessage)
+                self.status = .failed(.preciseLocationOff)
                 self.stop()
+            } else if case .failed(let problem) = self.status, problem.needsSettings {
+                // Turned on in Settings: carry on without being asked.
+                self.retry()
             }
         }
     }

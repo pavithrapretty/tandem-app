@@ -86,6 +86,18 @@ final class NearestStopFinder: NSObject, ObservableObject, CLLocationManagerDele
         return nil
     }
 
+    /// The nearest stop of `line` (the voice's "tram 1", "line 52"), with the
+    /// line under its name: "Tram 1". Nil if none, or no internet.
+    static func find(line: String, modes: Set<Transit.Mode>,
+                     near location: CLLocationCoordinate2D) async -> Destination? {
+        guard let (stop, mode) = await Transit.nearestStop(serving: line, modes: modes, near: location) else {
+            return nil
+        }
+        return Destination(name: stop.name, subtitle: "\(mode.name) \(line.uppercased())",
+                           coordinate: stop.coordinate, isStop: true, transitStopID: stop.id,
+                           transitModes: mode == .bus ? [.bus] : nil)
+    }
+
     private func handle(_ location: CLLocation) {
         guard location.horizontalAccuracy >= 0, location.horizontalAccuracy <= 100 else { return }
         guard !isSearching else { return }

@@ -22,7 +22,8 @@ struct SearchView: View {
     /// Opens listening (the microphone button on the home screen) instead of typing.
     var startsListening = false
     /// A place was picked: the home screen closes this and shows it.
-    var onPick: (Destination) -> Void
+    /// `byVoice`: said (or a chip tapped) while listening.
+    var onPick: (_ destination: Destination, _ byVoice: Bool) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -268,7 +269,7 @@ struct SearchView: View {
         ForEach(search.nearby) { stop in
             Button {
                 onPick(Destination(name: stop.stop.name, subtitle: "", coordinate: stop.stop.coordinate,
-                                   isStop: true, transitStopID: stop.stop.id))
+                                   isStop: true, transitStopID: stop.stop.id), false)
             } label: {
                 HStack(spacing: 14) {
                     Image(systemName: stop.modes.contains(.tram) ? "tram.fill"
@@ -314,7 +315,7 @@ struct SearchView: View {
     private func pick(_ suggestion: MKLocalSearchCompletion) {
         Task {
             if let destination = await search.resolve(suggestion) {
-                onPick(destination)
+                onPick(destination, false)
             }
         }
     }
@@ -436,6 +437,28 @@ struct SearchView: View {
     private func understand(_ words: String) {
         listener.stop()
         let spoken = words.lowercased()
+        // "Tram 1", "metro 52", "line 52": the nearest stop of that line.
+        if let request = LineRequest(spoken) {
+            phase = .lookingUp
+            Task {
+                guard let here = CLLocationManager().location?.coordinate else {
+                    phase = .failed("Don't know where you are", "Turn on Location Services for Tandem")
+                    return
+                }
+                // No metro 19: the tram 19 instead (and the other way round).
+                // The stop's subtitle says which it is.
+                var stop = await NearestStopFinder.find(line: request.line, modes: request.modes, near: here)
+                if stop == nil, let fallback = request.fallback {
+                    stop = await NearestStopFinder.find(line: request.line, modes: fallback, near: here)
+                }
+                if let stop {
+                    onPick(stop, true)
+                } else {
+                    phase = .failed("No \(request.name) nearby", "Try another line, or say a place")
+                }
+            }
+            return
+        }
         // "Nearest tram stop", "closest train station"…: that kind only.
         if spoken.contains("nearest") || spoken.contains("closest"),
            let (modes, kind) = Self.requestedKind(in: spoken) {
@@ -446,7 +469,7 @@ struct SearchView: View {
                     return
                 }
                 if let stop = await NearestStopFinder.find(near: here, modes: modes) {
-                    onPick(stop)
+                    onPick(stop, true)
                 } else {
                     phase = .failed("No \(kind) nearby", "Try another kind of stop, or say a place")
                 }
@@ -461,12 +484,12 @@ struct SearchView: View {
                 } else {
                     nil
                 }
-                onPick(stop ?? .centraalAsNearest)
+                onPick(stop ?? .centraalAsNearest, true)
             }
             return
         }
         if spoken.contains("centraal") || spoken.contains("central station") {
-            onPick(.centraal)
+            onPick(.centraal, true)
             return
         }
         if spoken == "home" || spoken.contains("take me home") || spoken.contains("go home") {
@@ -477,11 +500,83 @@ struct SearchView: View {
         phase = .lookingUp
         Task {
             if let destination = await PlaceLookup.find(words) {
-                onPick(destination)
+                onPick(destination, true)
             } else {
                 phase = .failed("Couldn't find \(words)", "Tap the microphone and try again, or type instead")
             }
         }
+    }
+}
+
+// MARK: - Lines
+
+/// A line said in the voice search: "tram 1", "metro 52", "bus 22", or just
+/// "line 52" or "52" (a tram or a metro). The number as digits or words
+/// ("tram one", "line fifty two").
+private struct LineRequest {
+    let line: String
+    let modes: Set<Transit.Mode>
+    /// What to call it: "tram 1", "line 52".
+    let name: String
+    /// Asked for a tram or a metro, and there is none: the other.
+    var fallback: Set<Transit.Mode>? {
+        switch modes {
+        case [.tram]: [.metro]
+        case [.metro]: [.tram]
+        default: nil
+        }
+    }
+
+    init?(_ spoken: String) {
+        let words = spoken.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+        for (index, word) in words.enumerated() {
+            let modes: Set<Transit.Mode>
+            switch word {
+            case "line", "lijn": modes = [.tram, .metro]
+            case "tram": modes = [.tram]
+            case "metro", "subway": modes = [.metro]
+            case "bus": modes = [.bus]
+            default: continue
+            }
+            guard let (line, _) = Self.number(in: Array(words[(index + 1)...])) else { continue }
+            self.line = line
+            self.modes = modes
+            name = "\(word == "lijn" ? "line" : word) \(line)"
+            return
+        }
+        // Only a number, "19": that line. Not "to" or "for" said alone.
+        if let (line, used) = Self.number(in: words, soundAlikes: false), used == words.count {
+            self.line = line
+            modes = [.tram, .metro]
+            name = "line \(line)"
+            return
+        }
+        return nil
+    }
+
+    private static let units = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+                                "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+                                "seventeen", "eighteen", "nineteen"]
+    private static let tens = ["twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+                               "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90]
+    /// Heard for a number said alone at the end ("tram two" as "tram to").
+    private static let soundAlikes = ["won": 1, "to": 2, "too": 2, "for": 4, "ate": 8]
+
+    /// The line's number (or name, "52", "2a") at the start of `words`, and
+    /// how many words it took ("fifty two": 2).
+    private static func number(in words: [String], soundAlikes: Bool = true) -> (String, Int)? {
+        guard let first = words.first else { return nil }
+        // "52", "2a", "n85"…: as heard.
+        if first.contains(where: \.isNumber) { return (first.uppercased(), 1) }
+        if let unit = units.firstIndex(of: first) { return ("\(unit)", 1) }
+        if let ten = tens[first] {
+            if words.count > 1, let unit = units.firstIndex(of: words[1]), unit > 0, unit < 10 {
+                return ("\(ten + unit)", 2)
+            }
+            return ("\(ten)", 1)
+        }
+        if soundAlikes, words.count == 1, let alike = Self.soundAlikes[first] { return ("\(alike)", 1) }
+        return nil
     }
 }
 
@@ -507,22 +602,25 @@ struct SearchBar<Content: View>: View {
                     Group {
                         if isListening {
                             Image(systemName: "xmark")
-                                .font(.system(size: 20, weight: .bold))
+                                .font(.system(size: 22, weight: .bold))
                         } else {
                             Image("icon-mic")
                                 .renderingMode(.template)
+                                .resizable()
+                                .frame(width: 26, height: 26)
                         }
                     }
                     .foregroundStyle(Palette.onAccent)
-                    .frame(width: 48, height: 48)
-                    .background(Palette.accent, in: RoundedRectangle(cornerRadius: 14))
+                    .frame(width: 56, height: 56)
+                    // 4 pt in from the bar, so 4 pt less round: the corners run alongside its own.
+                    .background(Palette.accent, in: RoundedRectangle(cornerRadius: 16))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(isListening ? "Stop listening" : "Search by voice")
             }
         }
         .padding(.leading, 18)
-        .padding(.trailing, showsMicrophone ? 8 : 18)
+        .padding(.trailing, showsMicrophone ? 4 : 18)
         .frame(minHeight: 64)
         .glassButtonBackground(tint: nil, fallback: Palette.card, in: RoundedRectangle(cornerRadius: 20))
         .overlay {
@@ -647,10 +745,10 @@ private final class PlaceSearch: NSObject, ObservableObject, MKLocalSearchComple
 
 #Preview {
     Typography.registerFonts()
-    return SearchView(onPick: { _ in })
+    return SearchView(onPick: { _, _ in })
 }
 
 #Preview("Listening") {
     Typography.registerFonts()
-    return SearchView(startsListening: true, onPick: { _ in })
+    return SearchView(startsListening: true, onPick: { _, _ in })
 }

@@ -157,6 +157,40 @@ enum Transit {
         .sorted { $0.time < $1.time }
     }
 
+    /// The stop closest to `location` that `line` (of these kinds) stops at,
+    /// and what kind it is there: the voice's "tram 1", "metro 52". The stops
+    /// don't say which lines they have, so the nearest dozen are asked for
+    /// their next departures, then a dozen more further out. Nil if none of
+    /// them has it soon (or there is no internet).
+    static func nearestStop(serving line: String, modes: Set<Mode>,
+                            near location: CLLocationCoordinate2D) async -> (stop: Stop, mode: Mode)? {
+        var asked = Set<String>()
+        for radius in [1_000.0, 3_000] {
+            guard let found = await stops(near: location, within: radius, modes: modes) else { return nil }
+            let candidates = Array(found.map(\.stop).filter { !asked.contains($0.id) }.prefix(12))
+            asked.formUnion(candidates.map(\.id))
+            // All at once; the nearest with the line wins.
+            let best = await withTaskGroup(of: (Int, Mode?).self) { group in
+                for (index, stop) in candidates.enumerated() {
+                    let id = stop.id
+                    // On the main actor, like the rest of Transit: it only waits on the network.
+                    group.addTask { @MainActor in
+                        let departures = await departures(from: id, count: 60, modes: modes) ?? []
+                        let match = departures.first { $0.line.caseInsensitiveCompare(line) == .orderedSame }
+                        return (index, match?.mode)
+                    }
+                }
+                var best: (index: Int, mode: Mode)?
+                for await (index, mode) in group {
+                    if let mode, index < best?.index ?? .max { best = (index, mode) }
+                }
+                return best
+            }
+            if let best { return (candidates[best.index], best.mode) }
+        }
+        return nil
+    }
+
     /// The departures from `destination`, if it is a stop: by its own stop if
     /// it was found here, else by the one at the same spot (a stop picked in
     /// search, which comes from Apple Maps).
@@ -166,6 +200,28 @@ enum Transit {
         if let id = destination.transitStopID { return await departures(from: id, modes: modes, after: after) }
         guard let stop = await nearestStop(near: destination.coordinate, within: 150, modes: modes) else { return nil }
         return await departures(from: stop.id, modes: modes, after: after)
+    }
+
+    /// All the lines that stop there, said after a stop picked by voice:
+    /// "tram lines: 1, 2, 5, 7, 13, metro lines: 52" ("trains" for the
+    /// trains, whose kinds aren't lines). Nil without any.
+    static func spokenLineList(of departures: [Departure]) -> String? {
+        var parts: [String] = []
+        for mode in [Mode.tram, .metro, .train, .bus] {
+            var names: [String] = []
+            for departure in departures where departure.mode == mode && !names.contains(departure.line) {
+                names.append(departure.line)
+            }
+            guard !names.isEmpty else { continue }
+            if mode == .train {
+                parts.append("trains")
+                continue
+            }
+            names.sort { $0.localizedStandardCompare($1) == .orderedAscending }
+            let kind = mode.name.lowercased() + (names.count == 1 ? " line" : " lines")
+            parts.append("\(kind): \(names.joined(separator: ", "))")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
     }
 
     /// The lines that stop there, by mode, for the home screen's card:
