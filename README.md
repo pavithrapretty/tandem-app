@@ -18,7 +18,7 @@ Requires iOS 17+ and watchOS 10+.
 | `Shared/Pattern.swift` | The patterns. Compiled into both apps. |
 | `HapticRemote/ConnectivityManager.swift` | iPhone: sends patterns, tracks connection status, receives patterns from the watch. |
 | `HapticRemote/PhoneHapticPlayer.swift` | iPhone: plays the same patterns on the phone with CoreHaptics. Forward and Turn around use the Anvil and Barrage presets from the [Pulsar](https://docs.swmansion.com/pulsar/) library, copied in as data. |
-| `HapticRemote/SettingsView.swift` | iPhone: Settings ("20 Settings" in Figma), with "Feel the signals again" to replay the tutorial and "Simulate a walk to Centraal", which opens the navigation screen with Back and Forward buttons to walk the route by hand (tap = 5 m, hold = keep walking). |
+| `HapticRemote/SettingsView.swift` | iPhone: Settings ("20 Settings" in Figma), with "Redo the onboarding" to replay the tutorial and "Simulate a walk to Centraal", which opens the navigation screen with Back and Forward buttons to walk the route by hand (tap = 5 m, hold = keep walking). |
 | `HapticRemote/GuidanceView.swift` | iPhone: the navigation screens ("09 – 14" in Figma). Follows the real route to Centraal or a searched place; the watch's remote buttons can take over. |
 | `HapticRemote/SearchView.swift` | iPhone: search for a place or stop, by typing (Apple Maps suggestions) or by voice, on one screen; picking one shows it on the home screen, and its card starts navigation. |
 | `HapticRemote/VoiceSearch.swift` | iPhone: the voice parts of the search screen ("06 Search · Listening" in Figma): speech recognition, the microphone circles and waveform that move with the voice, and the lookup of what was said. |

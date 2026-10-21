@@ -47,6 +47,8 @@ struct HomeView: View {
     @State private var lines: Transit.Lines?
     /// Set by tapping the lavender card, which opens the navigation screens.
     @State private var navigatingTo: Destination?
+    /// "Navigate to the nearest train station" said to Siri.
+    @ObservedObject private var siri = SiriRequests.shared
     /// The search sheet, open on the typed search or (the microphone button)
     /// the voice search. One value, not a flag beside it, so the sheet always
     /// opens on the one that was tapped.
@@ -141,7 +143,7 @@ struct HomeView: View {
             }
             .sensoryFeedback(.start, trigger: heldForVoice)
         }
-        .overlay { holdEdge }
+        .overlay { ScreenEdgeGlow(width: holdEdgeWidth) }
         // The back button in cream, like the design.
         .tint(Palette.text)
         .preferredColorScheme(.dark)
@@ -188,6 +190,58 @@ struct HomeView: View {
         .fullScreenCover(item: $navigatingTo) { destination in
             GuidanceView(destination: destination, connectivity: connectivity, phoneHaptics: phoneHaptics)
         }
+        // Also when Siri asked before this screen was there (the app opening).
+        .onChange(of: siri.navigateToNearestTrainStation, initial: true) { _, asked in
+            if asked { navigateToNearestTrainStation() }
+        }
+    }
+
+    // MARK: - Siri
+
+    /// "Navigate to the nearest train station": straight into the
+    /// directions, over whatever was open. Said out loud if there is none.
+    private func navigateToNearestTrainStation() {
+        siri.navigateToNearestTrainStation = false
+        searching = nil
+        Task {
+            guard let here = await currentLocation(),
+                  let station = await NearestStopFinder.find(near: here, modes: [.train]) else {
+                await say("No train station found near you.")
+                return
+            }
+            navigatingTo = station
+        }
+    }
+
+    /// Where the user is: the last fix if it is fresh, otherwise the first
+    /// good one (up to 10 seconds, as the app may only just have opened),
+    /// otherwise the last one known, however old.
+    private func currentLocation() async -> CLLocationCoordinate2D? {
+        if let last = locationManager.location, last.horizontalAccuracy >= 0,
+           last.horizontalAccuracy <= 100, last.timestamp.timeIntervalSinceNow > -60 {
+            return last.coordinate
+        }
+        let fix = await withTaskGroup(of: CLLocationCoordinate2D?.self) { group in
+            group.addTask {
+                do {
+                    for try await update in CLLocationUpdate.liveUpdates() {
+                        if let location = update.location, location.horizontalAccuracy >= 0,
+                           location.horizontalAccuracy <= 100 {
+                            return location.coordinate
+                        }
+                    }
+                } catch {}
+                return nil
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(10))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+        return fix ?? locationManager.location?.coordinate
     }
 
     // MARK: - Header
@@ -219,25 +273,6 @@ struct HomeView: View {
     // MARK: - Search
 
     private static let voiceHoldDuration: Double = 2
-
-    /// A lavender line round the edge of the screen, following its rounded
-    /// corners and softened into a glow, `holdEdgeWidth` wide.
-    private var holdEdge: some View {
-        // Half the line is past the screen's edge: `holdEdgeWidth` shows.
-        Group {
-            if #available(iOS 26, *) {
-                ConcentricRectangle().stroke(Palette.accent, lineWidth: holdEdgeWidth * 2)
-            } else {
-                Rectangle().stroke(Palette.accent, lineWidth: holdEdgeWidth * 2)
-            }
-        }
-        .blur(radius: holdEdgeWidth * 0.6)
-        // A line 0 wide is still a hairline: faded out as it gets there.
-        .opacity(min(1, holdEdgeWidth / 4))
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
 
     /// Holding for the voice search: from half a second, a tap every quarter
     /// second, each heavier than the last, up to the full hold. The glow

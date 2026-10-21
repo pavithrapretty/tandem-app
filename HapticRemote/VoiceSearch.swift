@@ -79,8 +79,10 @@ struct ListeningCircles: View {
 ///
 /// Without looking at the screen: a rising two-note chime says the
 /// microphone is listening, a soft tap on every burst of speech says it hears
-/// the voice, and a falling chime says it has stopped. The chimes play
-/// through the app's own audio, so they are heard on silent mode too.
+/// the voice, and a falling chime says it has stopped. An answer it takes
+/// (see `accepts`) gets a brighter rising chime and a success tap instead.
+/// The chimes play through the app's own audio, so they are heard on silent
+/// mode too.
 @MainActor
 final class SpeechListener: ObservableObject {
     struct Failure: Equatable {
@@ -96,6 +98,10 @@ final class SpeechListener: ObservableObject {
 
     /// What was said, once the user stops talking. Empty if nothing was heard.
     var onFinish: ((String) -> Void)?
+    /// Whether what was said is an answer that is taken. If so, the
+    /// confirming chime plays, and `onFinish` waits until it has been heard,
+    /// so it isn't cut off when the screen changes.
+    var accepts: ((String) -> Bool)?
 
     /// Quiet this long after speaking: done.
     private let pauseAfterSpeech: Duration = .milliseconds(1500)
@@ -116,6 +122,8 @@ final class SpeechListener: ObservableObject {
     /// Listening: up from A5 to E6. Done: back down.
     private static let listeningChime = chime([880, 1318.5])
     private static let doneChime = chime([1318.5, 880])
+    /// Taken: up through A major, A5 C♯6 E6.
+    private static let acceptedChime = chime([880, 1108.7, 1318.5])
 
     /// A soft tap for each burst of speech.
     private let speechTap = UIImpactFeedbackGenerator(style: .soft)
@@ -161,6 +169,18 @@ final class SpeechListener: ObservableObject {
         guard isRunning else { return }
         let words = transcript
         stopListening()
+        if let accepts, accepts(words) {
+            startTask = Task { [weak self] in
+                guard let self else { return }
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                await self.play(Self.acceptedChime)
+                // Stopped meanwhile (a button was tapped): nothing more to do.
+                guard !Task.isCancelled else { return }
+                self.stopAudio()
+                self.onFinish?(words)
+            }
+            return
+        }
         onFinish?(words)
         // The microphone is off already; the audio stays on for the chime.
         let finishing = Task { [weak self] in

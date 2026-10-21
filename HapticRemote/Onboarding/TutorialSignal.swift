@@ -17,6 +17,9 @@ struct TutorialSignal: Identifiable {
     let feel: String
     /// The voice line, spoken aloud and shown in the card.
     let voiceLine: String
+    /// The recorded voice played while the signal is on screen (an mp3 in
+    /// the Onboarding folder, without ".mp3"), nil if there isn't one yet.
+    var recording: String? = nil
     /// One line that helps remember it.
     let tip: String
     let color: Color
@@ -34,6 +37,7 @@ struct TutorialSignal: Identifiable {
                        title: "Turn left",
                        feel: "Four quick taps",
                        voiceLine: "Turn left in 20 metres",
+                       recording: "turn left",
                        tip: "Count the taps: four in a row means left.",
                        color: Palette.left,
                        dialIcon: "dial-icon-left",

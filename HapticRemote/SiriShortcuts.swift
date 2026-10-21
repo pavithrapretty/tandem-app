@@ -7,8 +7,13 @@
 //  settings as the switches in Settings and the navigation's Voice button,
 //  so a walk under way follows at once, without the app coming forward.
 //
+//  "Navigate to the nearest train station in Tandem" opens the app and goes
+//  straight into the walking directions there: the home screen looks the
+//  station up (SiriRequests) and opens the navigation screen.
+//
 
 import AppIntents
+import Combine
 
 /// On or off, as said to Siri.
 enum OnOff: String, AppEnum {
@@ -57,6 +62,30 @@ struct SetVibrationIntent: AppIntent {
     }
 }
 
+/// What Siri asked for that the app has to carry out on screen. The home
+/// screen watches it, also when it only appears later (after the tutorial).
+@MainActor
+final class SiriRequests: ObservableObject {
+    static let shared = SiriRequests()
+
+    /// Set by "Navigate to the nearest train station"; the home screen sets
+    /// it back once it has taken it on.
+    @Published var navigateToNearestTrainStation = false
+}
+
+/// Opens the app into the walking directions to the nearest train station.
+struct NavigateToNearestTrainStationIntent: AppIntent {
+    static let title: LocalizedStringResource = "Navigate to the nearest train station"
+    static let description = IntentDescription("Opens Tandem and starts walking directions to the train station closest to you.")
+    static let openAppWhenRun = true
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        SiriRequests.shared.navigateToNearestTrainStation = true
+        return .result(dialog: "Finding the nearest train station.")
+    }
+}
+
 /// The phrases Siri knows as soon as the app is installed. Each has the
 /// app's name in it, as Siri needs.
 struct TandemShortcuts: AppShortcutsProvider {
@@ -74,5 +103,13 @@ struct TandemShortcuts: AppShortcutsProvider {
             "Turn vibrations \(\.$state) in \(.applicationName)",
             "Turn \(.applicationName) vibration \(\.$state)",
         ], shortTitle: "Vibration on or off", systemImageName: "iphone.radiowaves.left.and.right")
+
+        AppShortcut(intent: NavigateToNearestTrainStationIntent(), phrases: [
+            "Navigate to the nearest train station in \(.applicationName)",
+            "Navigate to the nearest train station with \(.applicationName)",
+            "Take me to the nearest train station in \(.applicationName)",
+            "Walk to the nearest train station with \(.applicationName)",
+            "Nearest train station in \(.applicationName)",
+        ], shortTitle: "Nearest train station", systemImageName: "tram.fill")
     }
 }

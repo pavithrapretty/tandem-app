@@ -40,6 +40,31 @@ struct TutorialPage<Content: View>: View {
     }
 }
 
+/// A lavender line round the edge of the screen, following its rounded
+/// corners and softened into a glow, `width` wide (0 = none). On the home
+/// screen while it is held for the voice search, and on the intro while the
+/// microphone listens for the answer.
+struct ScreenEdgeGlow: View {
+    var width: CGFloat
+
+    var body: some View {
+        // Half the line is past the screen's edge: `width` shows.
+        Group {
+            if #available(iOS 26, *) {
+                ConcentricRectangle().stroke(Palette.accent, lineWidth: width * 2)
+            } else {
+                Rectangle().stroke(Palette.accent, lineWidth: width * 2)
+            }
+        }
+        .blur(radius: width * 0.6)
+        // A line 0 wide is still a hairline: faded out as it gets there.
+        .opacity(min(1, width / 4))
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 /// The tutorial screens' background, also behind the navigation screen.
 struct TutorialBackground: View {
     var tint: Color? = nil

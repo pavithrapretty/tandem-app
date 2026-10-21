@@ -8,12 +8,12 @@
 //  In sections. Voice: voice guidance (the navigation screen's Voice
 //  button is the same setting), the voice for Dutch names, and departures
 //  at the stop. Vibration: on or off. Route: the dial's look-ahead and the
-//  reroute distance, kept for every route. Learn: "Feel the signals again"
-//  opens the tutorial. Testing: "Simulate a walk to Centraal" opens the
-//  navigation screen with buttons to walk the route by hand; "Simulate by
-//  dragging the map" opens it with a map to drag the user around on.
-//  "Recorded walks" lists the real walks recorded on this phone, to share
-//  or replay.
+//  reroute distance, kept for every route. Testing: "Simulate a walk to
+//  Centraal" opens the navigation screen with buttons to walk the route by
+//  hand; "Simulate by dragging the map" opens it with a map to drag the
+//  user around on. "Recorded walks" lists the real walks recorded on this
+//  phone, to share or replay. Learn, last: "Redo the onboarding" opens the
+//  tutorial.
 //
 
 import AVFoundation
@@ -93,16 +93,6 @@ struct SettingsView: View {
                               explanation: "How far off the route you can get before a new route is found. Closer notices a wrong street sooner, but GPS drift may find new routes you don't need. With a weak GPS signal, up to 35 m is waited for anyway.")
             }
 
-            section("LEARN") {
-                Button {
-                    hasCompletedOnboarding = false
-                } label: {
-                    linkLabel("Feel the signals again", icon: Image("icon-settings-play"))
-                }
-                .buttonStyle(.plain)
-                .accessibilityHint("Opens the tutorial with the six signals.")
-            }
-
             section("TESTING", footer: "Try the guidance without walking, or look back at real walks.") {
                 simulationButton(.walk, title: "Simulate a walk to Centraal", systemImage: "figure.walk",
                                  hint: "Follows the route from where you are, moved with Forward and Back buttons instead of by walking.")
@@ -117,6 +107,16 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("Your recorded walks, to share or replay.")
+            }
+
+            section("LEARN") {
+                Button {
+                    hasCompletedOnboarding = false
+                } label: {
+                    linkLabel("Redo the onboarding", icon: Image("icon-settings-play"))
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens the tutorial with the six signals.")
             }
 
             Spacer(minLength: 0)
@@ -155,7 +155,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 18)
             }
         }
-        .padding(.top, 8)
+        .padding(.top, 18)
     }
 
     private func simulationButton(_ mode: RouteNavigator.Simulation, title: String,

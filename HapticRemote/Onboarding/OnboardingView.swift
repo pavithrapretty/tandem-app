@@ -7,7 +7,8 @@
 //  stack, so the back button and the swipe from the left edge go back one
 //  screen. The six signals are one screen, which slides from signal to
 //  signal by itself (SignalsView). "Skip for now" and "Go to Home" both call
-//  `onFinish`.
+//  `onFinish`. Next to the back arrow, a button mutes the recorded voice
+//  (VoiceMuteButton; SignalsView has its own back arrow, so it adds it there).
 //
 
 import SwiftUI
@@ -24,11 +25,14 @@ struct OnboardingView: View {
 
     @State private var path: [Step] = []
     @StateObject private var coach = TutorialCoach()
+    /// The glow round the screen's edge while the intro listens for an answer.
+    @State private var glowWidth: CGFloat = 0
 
     var body: some View {
         NavigationStack(path: $path) {
-            IntroView(onStart: { path.append(.signals) }, onSkip: onFinish)
-                .toolbar(.hidden, for: .navigationBar)
+            IntroView(onStart: { path.append(.signals) }, onSkip: onFinish, glowWidth: $glowWidth)
+                // The bar only for the mute button: see-through, as on the others.
+                .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationDestination(for: Step.self) { step in
                     screen(for: step)
                         .navigationBarTitleDisplayMode(.inline)
@@ -36,6 +40,8 @@ struct OnboardingView: View {
                         .toolbarBackground(.hidden, for: .navigationBar)
                 }
         }
+        // Above the whole stack, so it covers the screens without moving them.
+        .overlay { ScreenEdgeGlow(width: glowWidth) }
         // The back button is lavender on the dark background.
         .tint(Palette.accent)
         // Dark by default, so the status bar text is light.
@@ -49,8 +55,10 @@ struct OnboardingView: View {
             SignalsView(coach: coach) { path.append(.practice) }
         case .practice:
             PracticeView(coach: coach) { path.append(.ready) }
+                .toolbar { ToolbarItem(placement: .topBarLeading) { VoiceMuteButton() } }
         case .ready:
             ReadyView(coach: coach, onFinish: onFinish)
+                .toolbar { ToolbarItem(placement: .topBarLeading) { VoiceMuteButton() } }
         }
     }
 }

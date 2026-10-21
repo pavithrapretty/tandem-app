@@ -7,7 +7,12 @@
 //  slides the previous one back in from the left. The progress bar, the label
 //  and the button stay where they are; only the signal itself moves.
 //
-//  The vibration loops by itself while a signal is shown.
+//  The vibration loops by itself while a signal is shown, and the signal's
+//  recorded voice (if it has one) plays once each time it slides in. Then,
+//  once the line and the first round of the vibration are over, a voice says
+//  to go on to the next signal (not on the last one, whose button is
+//  Practise). Next to "SIGNAL 1 OF 6", the time the voice has played and
+//  how long it is, e.g. "0:03 / 0:16".
 //
 
 import SwiftUI
@@ -21,6 +26,9 @@ struct SignalsView: View {
     @State private var index: Int
     /// Which way the signals slide: forward = in from the right.
     @State private var movingForward = true
+    /// The recorded voice of the signal on screen.
+    @State private var voice: RecordedVoice?
+    @AppStorage(RecordedVoice.mutedKey) private var voiceMuted = false
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -41,8 +49,13 @@ struct SignalsView: View {
         TutorialPage(tint: signal.color) {
             TutorialProgress(filled: index + 1)
 
-            Eyebrow("SIGNAL \(index + 1) OF \(signals.count)")
-                .accessibilityLabel("Signal \(index + 1) of \(signals.count)")
+            HStack {
+                Eyebrow("SIGNAL \(index + 1) OF \(signals.count)")
+                    .accessibilityLabel("Signal \(index + 1) of \(signals.count)")
+                if let voice {
+                    VoiceTime(voice: voice)
+                }
+            }
 
             // The part that slides. A new id per signal makes SwiftUI swap the
             // whole block, which runs the transition.
@@ -57,12 +70,13 @@ struct SignalsView: View {
         // only leaves this screen from the first one.
         .navigationBarBackButtonHidden(true)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
+            ToolbarItemGroup(placement: .topBarLeading) {
                 Button(action: back) {
                     Image(systemName: "chevron.backward")
                         .font(.body.weight(.semibold))
                 }
                 .accessibilityLabel("Back")
+                VoiceMuteButton()
             }
         }
         // Swipe left for the next signal, right for the previous one.
@@ -78,10 +92,18 @@ struct SignalsView: View {
                     }
                 }
         )
-        .onAppear { coach.start(signal, owner: owner) }
-        .onDisappear { coach.stop(owner: owner) }
+        .onAppear {
+            coach.start(signal, owner: owner)
+            playRecording()
+        }
+        .onDisappear {
+            coach.stop(owner: owner)
+            voice?.stop()
+        }
+        .onChange(of: voiceMuted) { voice?.isMuted = voiceMuted }
         .onChange(of: index) {
             coach.start(signal, owner: owner)
+            playRecording()
             // Move VoiceOver to the top of the new signal.
             AccessibilityNotification.ScreenChanged().post()
         }
@@ -130,6 +152,20 @@ struct SignalsView: View {
         }
     }
 
+    /// The signal's recorded voice, then "next signal", once; whatever was
+    /// playing stops.
+    private func playRecording() {
+        voice?.stop()
+        let clips = [signal.recording, isLast ? nil : "next signal"].compactMap { $0 }
+        guard !clips.isEmpty else { return voice = nil }
+        let voice = RecordedVoice(clips)
+        self.voice = voice
+        // Without a line of its own, "next signal" waits for the first round
+        // of the vibration; a line is longer than a round anyway.
+        let delay = signal.recording == nil ? signal.pattern.playbackDuration : 0
+        Task { await voice.play(after: delay) }
+    }
+
     /// In from the right going forward, in from the left going back.
     /// With Reduce Motion: a fade.
     private var slide: AnyTransition {
@@ -156,6 +192,30 @@ struct SignalsView: View {
         }
         movingForward = false
         withAnimation(.smooth(duration: 0.35)) { index -= 1 }
+    }
+}
+
+/// How far the voice has got and how long it is, "0:03 / 0:16", counting
+/// up while it plays. Before it starts it shows 0:00; once it has ended, or
+/// been stopped, the full length.
+private struct VoiceTime: View {
+    let voice: RecordedVoice
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.25)) { context in
+            Text("\(Self.format(voice.played(at: context.date))) / \(Self.format(voice.duration))")
+                .font(.atkinson(14, .bold, relativeTo: .footnote))
+                .monospacedDigit()
+                .foregroundStyle(Palette.caption)
+                .fixedSize()
+        }
+        // Read once, not every quarter second.
+        .accessibilityLabel("Voice, \(Int(voice.duration.rounded())) seconds")
+    }
+
+    private static func format(_ seconds: TimeInterval) -> String {
+        let whole = Int(seconds)
+        return String(format: "%d:%02d", whole / 60, whole % 60)
     }
 }
 
