@@ -18,7 +18,7 @@ struct TutorialSignal: Identifiable {
     /// The voice line, spoken aloud and shown in the card.
     let voiceLine: String
     /// The recorded voice played while the signal is on screen (an mp3 in
-    /// the Onboarding folder, without ".mp3"), nil if there isn't one yet.
+    /// the Onboarding folder, without ".mp3"), nil if there isn't one.
     var recording: String? = nil
     /// One line that helps remember it.
     let tip: String
@@ -47,6 +47,7 @@ struct TutorialSignal: Identifiable {
                        title: "Turn right",
                        feel: "Two taps with a gap",
                        voiceLine: "Turn right in 10 metres",
+                       recording: "turn right",
                        tip: "Two taps, apart, means right.",
                        color: Palette.right,
                        dialIcon: "dial-icon-right",
@@ -56,6 +57,7 @@ struct TutorialSignal: Identifiable {
                        title: "Go straight",
                        feel: "One heavy thud every second",
                        voiceLine: "Go straight for 80 metres",
+                       recording: "go straight",
                        tip: "A steady beat means keep going.",
                        color: Palette.text,
                        dialIcon: "dial-icon-straight",
@@ -65,6 +67,7 @@ struct TutorialSignal: Identifiable {
                        title: "Turn around",
                        feel: "Two rapid bursts",
                        voiceLine: "Wrong way. Turn around",
+                       recording: "turn around",
                        tip: "Bursts always mean: stop and turn.",
                        color: Palette.turnAround,
                        dialIcon: "dial-icon-uturn",
@@ -74,6 +77,7 @@ struct TutorialSignal: Identifiable {
                        title: "Arrived",
                        feel: "Three taps, getting stronger",
                        voiceLine: "You've arrived at Centraal",
+                       recording: "arrived",
                        tip: "The journey is done.",
                        color: Palette.success,
                        dialIcon: "dial-icon-arrived",
@@ -83,6 +87,7 @@ struct TutorialSignal: Identifiable {
                        title: "Signal lost",
                        feel: "A short buzz every 10 seconds",
                        voiceLine: "Signal lost. Keep walking straight",
+                       recording: "connection lost",
                        tip: "We'll buzz again as soon as we find you.",
                        color: Palette.secondaryText,
                        dialIcon: "dial-icon-signal-lost",

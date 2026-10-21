@@ -8,8 +8,9 @@
 //  The watch has ready-made haptics (WKHapticType). The iPhone doesn't have
 //  those, so each one is rebuilt here from single taps. They are imitations:
 //  tune the numbers in `phoneTaps` below until they feel right in your hand.
-//  Two patterns use a preset from the Pulsar haptics library instead
+//  Some use a preset from the Pulsar haptics library instead
 //  (https://docs.swmansion.com/pulsar/), copied in below as plain data.
+//  Which one each signal plays is chosen in Settings (PhoneDesign.swift).
 //
 //  Robustness: one haptic engine for the whole player, without an audio
 //  session (so speech or music can't stop it), restarted whenever iOS stops
@@ -166,34 +167,16 @@ enum PhoneStrength {
 
 extension Pattern {
     /// A preset to play on the phone instead of the hand-built taps, or nil to
-    /// use the taps. Try presets out at
+    /// use the taps: the one of the design chosen for this signal
+    /// (PhoneDesign, Settings). Try presets out at
     /// https://docs.swmansion.com/pulsar/presets-playground/ and copy their
-    /// numbers into `PhonePreset`. The rhythm still comes from `steps`: the
+    /// numbers into `PhonePreset`. The rhythm still comes from the steps: the
     /// preset is played once for every step, in place of that step's haptic.
-    var phonePreset: PhonePreset? {
-        switch self {
-        case .forward, .almostThere: .anvil
-        case .turnAround: .barrage
-        case .left: .coil
-        default: nil
-        }
-    }
+    var phonePreset: PhonePreset? { phoneDesign.preset }
 
-    /// The steps the phone plays. Usually the same as the watch, but Coil is
-    /// one long signal on its own, so Left plays it once per run (instead of
-    /// once for each of the watch's four taps), followed by 1 second of quiet.
-    var phoneSteps: [PatternStep] {
-        switch self {
-        case .left:
-            [PatternStep(haptic: .start, delay: 0.65 + 1.0)]
-        case .turnAround:
-            // Barrage lasts about 0.3 seconds: 1 second of quiet after the second one.
-            [PatternStep(haptic: .failure, delay: 1.0),
-             PatternStep(haptic: .failure, delay: 0.31 + 1.0)]
-        default:
-            steps
-        }
-    }
+    /// The steps the phone plays: the chosen design's rhythm, which can
+    /// differ from the watch's (Coil, for one, is a long signal on its own).
+    var phoneSteps: [PatternStep] { phoneDesign.steps }
 
     /// One run of the pattern, laid out on a single timeline (in seconds):
     /// the haptic events, the moments a light should blink (one for every tap

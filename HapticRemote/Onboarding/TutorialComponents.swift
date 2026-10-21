@@ -65,6 +65,56 @@ struct ScreenEdgeGlow: View {
     }
 }
 
+/// While the microphone listens for an answer: "Listening. Say …". Its room
+/// is always kept, so nothing moves when it shows.
+struct ListeningHint: View {
+    @ObservedObject var listener: SpeechListener
+    var text: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "mic.fill")
+                .foregroundStyle(Palette.accent)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.atkinson(15, .bold, relativeTo: .subheadline))
+                .foregroundStyle(Palette.caption)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .opacity(listener.isRunning ? 1 : 0)
+        .accessibilityHidden(!listener.isRunning)
+    }
+}
+
+/// Sets the glow round the screen's edge (drawn by OnboardingView, above
+/// everything) while `listener` listens: the home screen's full hold (20 pt),
+/// a little wider as the voice gets loud (not with Reduce Motion). Only the
+/// glow animates: fading in and out slowly, following the voice fast.
+struct ListeningGlow: ViewModifier {
+    @ObservedObject var listener: SpeechListener
+    var width: Binding<CGFloat>
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var target: CGFloat {
+        guard listener.isRunning else { return 0 }
+        return reduceMotion ? 20 : 16 + 8 * listener.level
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: target) { old, new in
+                withAnimation(.easeOut(duration: old == 0 || new == 0 ? 0.3 : 0.1)) {
+                    width.wrappedValue = new
+                }
+            }
+            // Gone with the screen, not left behind on the next one.
+            .onDisappear {
+                withAnimation(.easeOut(duration: 0.3)) { width.wrappedValue = 0 }
+            }
+    }
+}
+
 /// The tutorial screens' background, also behind the navigation screen.
 struct TutorialBackground: View {
     var tint: Color? = nil
@@ -83,21 +133,35 @@ struct TutorialBackground: View {
     }
 }
 
-/// Six segments, the first `filled` of them lit.
+/// Six segments, the first `filled` of them lit (the last of those filling
+/// up with the voice, if there is one).
 struct TutorialProgress: View {
     var filled: Int
     var total = TutorialSignal.all.count
+    /// The voice of the current step: its piece (the last filled one) fills
+    /// up as it plays, like the line on the intro. Nil: filled at once.
+    var voice: RecordedVoice? = nil
 
     var body: some View {
-        HStack(spacing: 6) {
-            ForEach(0..<total, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(index < filled ? Palette.text : Palette.track)
-                    .frame(height: 5)
+        Group {
+            if let voice {
+                TimelineView(.animation(minimumInterval: 1 / 30)) { context in
+                    segments(current: voice.fraction(at: context.date))
+                }
+            } else {
+                segments(current: 1)
             }
         }
         // The small caps label under it already says where you are.
         .accessibilityHidden(true)
+    }
+
+    private func segments(current: Double) -> some View {
+        HStack(spacing: 6) {
+            ForEach(0..<total, id: \.self) { index in
+                ProgressSegment(fraction: index < filled - 1 ? 1 : index == filled - 1 ? current : 0)
+            }
+        }
     }
 }
 

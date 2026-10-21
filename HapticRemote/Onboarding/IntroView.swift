@@ -36,8 +36,9 @@ struct IntroView: View {
     /// The recording has ended or was skipped: no skip button any more.
     @State private var voiceIsDone = false
     /// Hears the answer to the question at the end of the recording.
-    @StateObject private var listener = SpeechListener()
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Not observed here: the hint and the glow watch it themselves, so its
+    /// loudness doesn't redraw the whole screen many times a second.
+    @State private var listener = SpeechListener()
     @AppStorage(RecordedVoice.mutedKey) private var voiceMuted = false
 
     var body: some View {
@@ -69,22 +70,14 @@ struct IntroView: View {
 
             Spacer(minLength: 0)
 
-            // Its room is always kept, so nothing moves when it shows.
-            listeningHint
-                .opacity(listener.isRunning ? 1 : 0)
-                .accessibilityHidden(!listener.isRunning)
+            ListeningHint(listener: listener, text: "Listening. Say “yes” to start or “skip”.")
 
             PrimaryButton("Start", action: onStart)
             SecondaryButton("Skip for now", action: onSkip)
         }
         // Listening: the glow round the screen's edge, as when holding the
-        // home screen for the voice search, swelling with the voice. Only the
-        // glow animates: fading in and out slowly, following the voice fast.
-        .onChange(of: listeningGlowWidth) { old, new in
-            withAnimation(.easeOut(duration: old == 0 || new == 0 ? 0.3 : 0.1)) {
-                glowWidth.wrappedValue = new
-            }
-        }
+        // home screen for the voice search, swelling with the voice.
+        .modifier(ListeningGlow(listener: listener, width: glowWidth))
         // The mute button where the other screens have it, by their back arrow.
         .toolbar {
             ToolbarItemGroup(placement: .topBarLeading) {
@@ -117,30 +110,7 @@ struct IntroView: View {
         .onDisappear {
             sound.stop()
             listener.stop()
-            // Gone with the screen, not left behind on the next one.
-            withAnimation(.easeOut(duration: 0.3)) { glowWidth.wrappedValue = 0 }
         }
-    }
-
-    /// The glow's width: the home screen's full hold (20 pt), a little wider
-    /// as the voice gets loud (not with Reduce Motion), 0 when not listening.
-    private var listeningGlowWidth: CGFloat {
-        guard listener.isRunning else { return 0 }
-        return reduceMotion ? 20 : 16 + 8 * listener.level
-    }
-
-    /// Shown while the microphone listens for the answer.
-    private var listeningHint: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "mic.fill")
-                .foregroundStyle(Palette.accent)
-                .accessibilityHidden(true)
-            Text("Listening. Say “yes” to start or “skip”.")
-                .font(.atkinson(15, .bold, relativeTo: .subheadline))
-                .foregroundStyle(Palette.caption)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
     }
 
     /// The skip button: the recording stops, and the microphone listens for

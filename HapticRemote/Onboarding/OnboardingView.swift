@@ -52,7 +52,7 @@ struct OnboardingView: View {
     private func screen(for step: Step) -> some View {
         switch step {
         case .signals:
-            SignalsView(coach: coach) { path.append(.practice) }
+            SignalsView(coach: coach, glowWidth: $glowWidth) { path.append(.practice) }
         case .practice:
             PracticeView(coach: coach) { path.append(.ready) }
                 .toolbar { ToolbarItem(placement: .topBarLeading) { VoiceMuteButton() } }

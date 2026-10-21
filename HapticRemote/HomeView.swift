@@ -9,7 +9,8 @@
 //
 //  Holding anywhere for 2 seconds starts the voice search, like the
 //  microphone button, with taps getting heavier on the way there and a
-//  lavender glow round the screen's edge growing with each. The sliders button opens Settings in a navigation stack. A place picked in
+//  lavender glow round the screen's edge growing with each. The same glow
+//  shows while the microphone listens for the answer to "Start directions?". The sliders button opens Settings in a navigation stack. A place picked in
 //  search takes the lavender card's place (the nearest stop) and the map's
 //  route; tapping the card opens the navigation screens (GuidanceView). A
 //  stop's lines come from Transit; "back to where you arrived" is sample
@@ -74,6 +75,9 @@ struct HomeView: View {
     /// How far the glow round the screen's edge reaches in, in points:
     /// wider with each tap, 0 when not held.
     @State private var holdEdgeWidth: CGFloat = 0
+    /// The same glow while the microphone listens for the yes or no to
+    /// "Start directions?", as in the tutorial.
+    @State private var listeningEdgeWidth: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Asks once for permission to show the user's location on the map.
@@ -143,7 +147,8 @@ struct HomeView: View {
             }
             .sensoryFeedback(.start, trigger: heldForVoice)
         }
-        .overlay { ScreenEdgeGlow(width: holdEdgeWidth) }
+        .overlay { ScreenEdgeGlow(width: max(holdEdgeWidth, listeningEdgeWidth)) }
+        .modifier(ListeningGlow(listener: confirmListener, width: $listeningEdgeWidth))
         // The back button in cream, like the design.
         .tint(Palette.text)
         .preferredColorScheme(.dark)

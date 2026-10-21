@@ -4,10 +4,9 @@
 //
 //  Recorded voice lines for the tutorial (mp3 files in this folder), played
 //  one straight after the other: the intro, and on the signals screen a
-//  signal's line followed by "next signal". They start a second after
-//  `play()` (or later, if asked), so the screen has settled first. Other
-//  apps' audio is turned down while they play, and comes back up when they
-//  end or are stopped.
+//  signal's line followed by "next signal". They start as soon as `play()`
+//  is called (or later, if asked). Other apps' audio is turned down while
+//  they play, and comes back up when they end or are stopped.
 //
 //  VoiceMuteButton, in the tutorial's navigation bar, mutes them for the
 //  whole tutorial (and next time). Muted, they still play silently, so the
@@ -36,6 +35,11 @@ final class RecordedVoice: NSObject, AVAudioPlayerDelegate {
     /// All the clips together, in seconds.
     var duration: TimeInterval { players.reduce(0) { $0 + $1.duration } }
 
+    /// How much has played at `date`, 0 to 1.
+    func fraction(at date: Date) -> Double {
+        duration > 0 ? played(at: date) / duration : 1
+    }
+
     /// Seconds played at `date`: 0 before the first clip starts, the full
     /// length once they have ended or were stopped.
     func played(at date: Date) -> TimeInterval {
@@ -47,10 +51,19 @@ final class RecordedVoice: NSObject, AVAudioPlayerDelegate {
     /// Set by `stop()`, so a `play()` still switching the session on doesn't
     /// start after all.
     private var isStopped = false
-    /// The audio session is on for these clips, until they end or are stopped.
+    /// These clips use the audio session, from `play()` until they end or
+    /// are stopped.
     private var sessionIsOn = false
-    /// From `play()` to the first clip, at the least.
-    private static let minimumDelay: TimeInterval = 1
+    /// How many recordings use the session now. Only the last one to finish
+    /// switches it off: when Start is tapped during the intro, the first
+    /// signal's voice starts before the intro's is stopped, and switching
+    /// the session off then would silence the signal's too.
+    private static var sessionUsers = 0
+    /// Scheduling on the audio clock needs a moment's lead: the output takes
+    /// a little while to get going (longer just after the microphone had the
+    /// session), and the recordings start speaking almost at once, so with
+    /// less the first syllable is cut off.
+    private static let clockLead: TimeInterval = 0.2
 
     /// `names`: mp3 files in the app, without ".mp3". A missing one is left out.
     init(_ names: [String]) {
@@ -66,19 +79,21 @@ final class RecordedVoice: NSObject, AVAudioPlayerDelegate {
         players.last?.delegate = self
     }
 
-    /// `delay`: seconds before the first clip, never less than one.
+    /// `delay`: seconds before the first clip.
     func play(after delay: TimeInterval = 0) async {
         guard let first = players.first else { return }
         isStopped = false
         isOver = false
+        // Counted before the wait, so a recording stopping meanwhile leaves
+        // the session on for this one.
+        claimSession()
         try? await AudioSessionQueue.run { session in
             try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
             try session.setActive(true)
         }
         // Left the screen while the session was switching on.
-        guard !Task.isCancelled, !isStopped else { return AudioSessionQueue.deactivate() }
-        sessionIsOn = true
-        let wait = max(delay, Self.minimumDelay)
+        guard !Task.isCancelled, !isStopped else { return releaseSession() }
+        let wait = max(delay, 0) + Self.clockLead
         let begin = Date() + wait
         playback = begin...(begin + duration)
         // All on the audio clock, so each starts the moment the one before
@@ -86,6 +101,8 @@ final class RecordedVoice: NSObject, AVAudioPlayerDelegate {
         var start = first.deviceCurrentTime + wait
         for player in players {
             player.currentTime = 0
+            // Again each time: stopping a player undoes it.
+            player.prepareToPlay()
             player.play(atTime: start)
             start += player.duration
         }
@@ -97,18 +114,32 @@ final class RecordedVoice: NSObject, AVAudioPlayerDelegate {
         playback = nil
         isOver = true
         players.forEach { $0.stop() }
+        releaseSession()
+    }
+
+    private func claimSession() {
+        guard !sessionIsOn else { return }
+        sessionIsOn = true
+        Self.sessionUsers += 1
+    }
+
+    /// Switches the session off if no other recording still uses it, and
+    /// `deactivating`: not when the microphone takes over straight after
+    /// (`onFinish`), which would only have to switch it back on, slowly.
+    private func releaseSession(deactivating: Bool = true) {
         guard sessionIsOn else { return }
         sessionIsOn = false
-        AudioSessionQueue.deactivate()
+        Self.sessionUsers -= 1
+        if deactivating, Self.sessionUsers == 0 { AudioSessionQueue.deactivate() }
     }
 
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor in
             guard self.sessionIsOn else { return }
-            self.sessionIsOn = false
             self.playback = nil
             self.isOver = true
-            AudioSessionQueue.deactivate()
+            // Something follows (the microphone): it takes the session over.
+            self.releaseSession(deactivating: self.onFinish == nil)
             self.onFinish?()
         }
     }
@@ -121,20 +152,28 @@ struct VoiceProgressBar: View {
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 30)) { context in
-            let fraction = voice.duration > 0 ? voice.played(at: context.date) / voice.duration : 0
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Palette.track)
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Palette.text)
-                        .frame(width: proxy.size.width * fraction)
-                }
-            }
-            .frame(height: 5)
+            ProgressSegment(fraction: voice.fraction(at: context.date))
         }
         .accessibilityElement()
         .accessibilityLabel("Voice, \(Int(voice.duration.rounded())) seconds")
+    }
+}
+
+/// One piece of a progress bar, filled from the left by `fraction` (0 to 1).
+struct ProgressSegment: View {
+    var fraction: Double
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Palette.track)
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Palette.text)
+                    .frame(width: proxy.size.width * fraction)
+            }
+        }
+        .frame(height: 5)
     }
 }
 

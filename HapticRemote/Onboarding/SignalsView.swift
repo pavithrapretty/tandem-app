@@ -11,8 +11,14 @@
 //  recorded voice (if it has one) plays once each time it slides in. Then,
 //  once the line and the first round of the vibration are over, a voice says
 //  to go on to the next signal (not on the last one, whose button is
-//  Practise). Next to "SIGNAL 1 OF 6", the time the voice has played and
-//  how long it is, e.g. "0:03 / 0:16".
+//  Practise). The signal's piece of the progress bar fills up as its voice
+//  plays.
+//
+//  Then the microphone listens, with the glow round the screen's edge as on
+//  the intro: "next", "next signal" or "proceed" goes on (on the last
+//  signal, to the practice), "repeat" or "again" plays the voice and the
+//  vibration again from the start. A signal without a voice listens after
+//  the first round of the vibration.
 //
 
 import SwiftUI
@@ -21,6 +27,8 @@ struct SignalsView: View {
     @ObservedObject var coach: TutorialCoach
     /// Called after the last signal ("Practise").
     var onFinish: () -> Void
+    /// The glow round the screen's edge while listening (see IntroView).
+    var glowWidth: Binding<CGFloat> = .constant(0)
 
     /// Index into `TutorialSignal.all` of the signal on screen.
     @State private var index: Int
@@ -29,6 +37,15 @@ struct SignalsView: View {
     /// The recorded voice of the signal on screen.
     @State private var voice: RecordedVoice?
     @AppStorage(RecordedVoice.mutedKey) private var voiceMuted = false
+    /// Hears "next" or "repeat" after the voice. Not observed here: its
+    /// loudness changes many times a second, which would redraw the whole
+    /// screen, dial and all. The hint and the glow watch it themselves.
+    @State private var listener = SpeechListener()
+    /// Each signal's voice, made once: loading the mp3s as a signal slides
+    /// in would hold up the slide.
+    @State private var voices: [Int: RecordedVoice] = [:]
+    /// Waits for the vibration before listening, where there is no voice.
+    @State private var listenLater: Task<Void, Never>?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -39,23 +56,21 @@ struct SignalsView: View {
     private var isLast: Bool { index == signals.count - 1 }
 
     /// `startIndex` is only passed in by the previews.
-    init(coach: TutorialCoach, startIndex: Int = 0, onFinish: @escaping () -> Void) {
+    init(coach: TutorialCoach, startIndex: Int = 0, glowWidth: Binding<CGFloat> = .constant(0),
+         onFinish: @escaping () -> Void) {
         self.coach = coach
         self.onFinish = onFinish
+        self.glowWidth = glowWidth
         _index = State(initialValue: startIndex)
     }
 
     var body: some View {
         TutorialPage(tint: signal.color) {
-            TutorialProgress(filled: index + 1)
+            // This signal's piece fills up as its voice plays.
+            TutorialProgress(filled: index + 1, voice: voice)
 
-            HStack {
-                Eyebrow("SIGNAL \(index + 1) OF \(signals.count)")
-                    .accessibilityLabel("Signal \(index + 1) of \(signals.count)")
-                if let voice {
-                    VoiceTime(voice: voice)
-                }
-            }
+            Eyebrow("SIGNAL \(index + 1) OF \(signals.count)")
+                .accessibilityLabel("Signal \(index + 1) of \(signals.count)")
 
             // The part that slides. A new id per signal makes SwiftUI swap the
             // whole block, which runs the transition.
@@ -64,8 +79,13 @@ struct SignalsView: View {
                 .transition(slide)
                 .frame(maxHeight: .infinity)
 
+            ListeningHint(listener: listener, text: isLast
+                          ? "Listening. Say “next” to practise or “repeat”."
+                          : "Listening. Say “next” or “repeat”.")
+
             PrimaryButton(isLast ? "Practise" : "Next signal", action: next)
         }
+        .modifier(ListeningGlow(listener: listener, width: glowWidth))
         // Our own Back button: it steps back through the signals first, and
         // only leaves this screen from the first one.
         .navigationBarBackButtonHidden(true)
@@ -93,12 +113,18 @@ struct SignalsView: View {
                 }
         )
         .onAppear {
+            // Once the user stops talking: a command gets the confirming
+            // chime, and only then is carried out.
+            listener.accepts = { SignalCommand($0) != nil }
+            listener.onFinish = { heard($0) }
             coach.start(signal, owner: owner)
             playRecording()
+            preloadVoices()
         }
         .onDisappear {
             coach.stop(owner: owner)
             voice?.stop()
+            stopListening()
         }
         .onChange(of: voiceMuted) { voice?.isMuted = voiceMuted }
         .onChange(of: index) {
@@ -124,11 +150,6 @@ struct SignalsView: View {
                 .multilineTextAlignment(.center)
                 .accessibilityAddTraits(.isHeader)
 
-            Text(signal.feel)
-                .font(.atkinson(19, .bold, relativeTo: .title3))
-                .foregroundStyle(Palette.secondaryText)
-                .multilineTextAlignment(.center)
-
             HStack(spacing: 10) {
                 Image("icon-volume-small")
                     .accessibilityHidden(true)
@@ -143,27 +164,67 @@ struct SignalsView: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Voice says: \(signal.voiceLine)")
 
-            Text(signal.tip)
-                .font(.atkinson(15, relativeTo: .subheadline))
-                .foregroundStyle(Palette.caption)
-                .multilineTextAlignment(.center)
-
             Spacer(minLength: 0)
         }
     }
 
-    /// The signal's recorded voice, then "next signal", once; whatever was
-    /// playing stops.
+    /// The signal's recorded voice, then "next signal", once, and then the
+    /// microphone; whatever was playing or listening stops.
     private func playRecording() {
         voice?.stop()
+        stopListening()
         let clips = [signal.recording, isLast ? nil : "next signal"].compactMap { $0 }
-        guard !clips.isEmpty else { return voice = nil }
-        let voice = RecordedVoice(clips)
+        guard !clips.isEmpty else {
+            voice = nil
+            // No voice: listen once the first round of the vibration is felt.
+            let wait = max(1, signal.pattern.playbackDuration)
+            listenLater = Task {
+                try? await Task.sleep(for: .seconds(wait))
+                guard !Task.isCancelled else { return }
+                listener.start()
+            }
+            return
+        }
+        let voice = voices[index] ?? RecordedVoice(clips)
+        voices[index] = voice
+        voice.onFinish = { listener.start() }
         self.voice = voice
         // Without a line of its own, "next signal" waits for the first round
         // of the vibration; a line is longer than a round anyway.
         let delay = signal.recording == nil ? signal.pattern.playbackDuration : 0
         Task { await voice.play(after: delay) }
+    }
+
+    /// The other signals' voices, one at a time once this screen has slid
+    /// in, before they are needed.
+    private func preloadVoices() {
+        Task {
+            try? await Task.sleep(for: .seconds(0.6))
+            for (i, signal) in signals.enumerated() where voices[i] == nil {
+                let clips = [signal.recording, i == signals.count - 1 ? nil : "next signal"].compactMap { $0 }
+                guard !clips.isEmpty else { continue }
+                voices[i] = RecordedVoice(clips)
+                try? await Task.sleep(for: .seconds(0.1))
+            }
+        }
+    }
+
+    private func stopListening() {
+        listenLater?.cancel()
+        listenLater = nil
+        listener.stop()
+    }
+
+    /// What was said after the voice: on to the next signal, or the voice
+    /// and the vibration again from the start.
+    private func heard(_ words: String) {
+        switch SignalCommand(words) {
+        case .next: next()
+        case .repeat:
+            coach.start(signal, owner: owner)
+            playRecording()
+        case nil: break
+        }
     }
 
     /// In from the right going forward, in from the left going back.
@@ -195,27 +256,24 @@ struct SignalsView: View {
     }
 }
 
-/// How far the voice has got and how long it is, "0:03 / 0:16", counting
-/// up while it plays. Before it starts it shows 0:00; once it has ended, or
-/// been stopped, the full length.
-private struct VoiceTime: View {
-    let voice: RecordedVoice
+/// "Next" or "repeat" in what the user said, if either is there. Repeat
+/// wins, so "repeat the signal" doesn't go on.
+private enum SignalCommand {
+    case next, `repeat`
 
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.25)) { context in
-            Text("\(Self.format(voice.played(at: context.date))) / \(Self.format(voice.duration))")
-                .font(.atkinson(14, .bold, relativeTo: .footnote))
-                .monospacedDigit()
-                .foregroundStyle(Palette.caption)
-                .fixedSize()
+    private static let repeatWords: Set = ["repeat", "again", "replay"]
+    private static let nextWords: Set = ["next", "proceed", "continue", "forward", "practise", "practice"]
+
+    init?(_ said: String) {
+        let words = said.lowercased().split { !$0.isLetter }.map(String.init)
+        if words.contains(where: Self.repeatWords.contains) {
+            self = .repeat
+        } else if words.contains(where: Self.nextWords.contains)
+                    || " \(words.joined(separator: " ")) ".contains(" go on ") {
+            self = .next
+        } else {
+            return nil
         }
-        // Read once, not every quarter second.
-        .accessibilityLabel("Voice, \(Int(voice.duration.rounded())) seconds")
-    }
-
-    private static func format(_ seconds: TimeInterval) -> String {
-        let whole = Int(seconds)
-        return String(format: "%d:%02d", whole / 60, whole % 60)
     }
 }
 

@@ -8,7 +8,9 @@
 //  In sections. Voice: voice guidance (the navigation screen's Voice
 //  button is the same setting), the voice for Dutch names, and departures
 //  at the stop. Vibration: on or off. Route: the dial's look-ahead and the
-//  reroute distance, kept for every route. Testing: "Simulate a walk to
+//  reroute distance, kept for every route. Vibration patterns: what each
+//  signal feels like on the iPhone, picked from a list that plays each one
+//  (PatternDesignView). Testing: "Simulate a walk to
 //  Centraal" opens the navigation screen with buttons to walk the route by
 //  hand; "Simulate by dragging the map" opens it with a map to drag the
 //  user around on. "Recorded walks" lists the real walks recorded on this
@@ -79,6 +81,20 @@ struct SettingsView: View {
             section("VIBRATION", footer: "Off, the dial still lights up with the signals, and a connected Apple Watch keeps vibrating.") {
                 toggleRow(icon: "icon-settings-wave", title: "Vibration", isOn: $vibrationOn,
                           hint: "The iPhone vibrates the signals. Off, the dial still lights up with them; a connected Apple Watch keeps vibrating.")
+            }
+
+            section("VIBRATION PATTERNS", footer: "What each signal feels like on this iPhone. The Apple Watch keeps its own.") {
+                ForEach(Array(Pattern.allCases.enumerated()), id: \.element) { i, pattern in
+                    if i > 0 { divider }
+                    NavigationLink {
+                        PatternDesignView(pattern: pattern, phoneHaptics: phoneHaptics)
+                    } label: {
+                        PatternDesignRow(pattern: pattern)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Choose what \(pattern.title) feels like.")
+                }
             }
 
             section("ROUTE") {
@@ -249,6 +265,148 @@ struct SettingsView: View {
         .padding(.vertical, 18)
         // VoiceOver reads "Dutch names, Automatic".
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// A signal and the vibration chosen for it: "Left   Coil  >". Watches its
+/// own setting, so it shows a new choice on coming back from the list.
+private struct PatternDesignRow: View {
+    let pattern: Pattern
+    @AppStorage private var chosen: String
+
+    init(pattern: Pattern) {
+        self.pattern = pattern
+        _chosen = AppStorage(wrappedValue: pattern.defaultDesign.rawValue, pattern.designKey)
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: pattern.symbol)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(Palette.caption)
+                .frame(width: 24, height: 24)
+                .accessibilityHidden(true)
+            Text(pattern.title)
+                .font(.atkinson(19, .bold, relativeTo: .headline))
+                .foregroundStyle(Palette.text)
+                .fixedSize()
+            Spacer(minLength: 8)
+            Text((PhoneDesign(rawValue: chosen) ?? pattern.defaultDesign).title)
+                .font(.atkinson(18, .bold, relativeTo: .headline))
+                .foregroundStyle(Palette.accent)
+                .lineLimit(1)
+            Image("icon-chevron-right")
+                .accessibilityHidden(true)
+        }
+        .padding(.vertical, 18)
+        // VoiceOver reads "Left, Coil".
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The vibrations to choose from for one signal. Tapping one picks it and
+/// plays it once, so it can be felt before going back.
+private struct PatternDesignView: View {
+    let pattern: Pattern
+    @ObservedObject var phoneHaptics: PhoneHapticPlayer
+    @AppStorage private var chosen: String
+
+    init(pattern: Pattern, phoneHaptics: PhoneHapticPlayer) {
+        self.pattern = pattern
+        self.phoneHaptics = phoneHaptics
+        _chosen = AppStorage(wrappedValue: pattern.defaultDesign.rawValue, pattern.designKey)
+    }
+
+    var body: some View {
+        TutorialPage {
+            Text(pattern.title)
+                .font(.atkinson(34, .extraBold, relativeTo: .largeTitle))
+                .tracking(-0.68)
+                .foregroundStyle(Palette.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityAddTraits(.isHeader)
+
+            Text("Tap one to feel it. It is used from the next time this signal plays, also during a walk.")
+                .font(.atkinson(17, .regular, relativeTo: .body))
+                .foregroundStyle(Palette.caption)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(spacing: 0) {
+                ForEach(Array(PhoneDesign.allCases.enumerated()), id: \.element) { i, design in
+                    if i > 0 { divider }
+                    option(design)
+                }
+            }
+            .padding(.horizontal, 18)
+            .background(Palette.card, in: RoundedRectangle(cornerRadius: 24))
+
+            if chosen != pattern.defaultDesign.rawValue {
+                Button("Reset to \(pattern.defaultDesign.title)") {
+                    choose(pattern.defaultDesign)
+                }
+                .font(.atkinson(16, .bold, relativeTo: .callout))
+                .foregroundStyle(Palette.accent)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .onDisappear { phoneHaptics.stop() }
+        .navigationTitle(pattern.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) { Color.clear }
+        }
+        .toolbarBackground(.hidden, for: .navigationBar)
+    }
+
+    /// Picks `design` and plays it once, even with the vibration off in Settings.
+    private func choose(_ design: PhoneDesign) {
+        chosen = design.rawValue
+        phoneHaptics.play(pattern, vibrate: true, once: true)
+    }
+
+    private func option(_ design: PhoneDesign) -> some View {
+        Button {
+            choose(design)
+        } label: {
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text(design.title)
+                            .font(.atkinson(19, .bold, relativeTo: .headline))
+                            .foregroundStyle(Palette.text)
+                        if design == pattern.defaultDesign {
+                            Text("Default")
+                                .font(.atkinson(14, .bold, relativeTo: .footnote))
+                                .foregroundStyle(Palette.caption)
+                        }
+                    }
+                    Text(design.detail)
+                        .font(.atkinson(16, .regular, relativeTo: .subheadline))
+                        .foregroundStyle(Palette.caption)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if chosen == design.rawValue {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(Palette.accent)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(.vertical, 16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(chosen == design.rawValue ? .isSelected : [])
+        .accessibilityHint("Uses this for \(pattern.title) and plays it once.")
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(Palette.track)
+            .frame(height: 1)
     }
 }
 

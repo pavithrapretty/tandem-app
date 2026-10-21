@@ -109,7 +109,10 @@ final class SpeechListener: ObservableObject {
     private let waitForSpeech: Duration = .seconds(8)
 
     private let recognizer = SFSpeechRecognizer()
-    private let engine = AVAudioEngine()
+    /// New for every start (`startAudio`): one used before can keep the
+    /// microphone set up as it was, and hear nothing after other audio (the
+    /// tutorial's recordings) has switched the session to playback only.
+    private var engine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var silenceTimer: Task<Void, Never>?
@@ -117,7 +120,7 @@ final class SpeechListener: ObservableObject {
     private var startTask: Task<Void, Never>?
 
     /// Plays the chimes, on the same engine as the microphone.
-    private let chimePlayer = AVAudioPlayerNode()
+    private var chimePlayer = AVAudioPlayerNode()
     private static let chimeFormat = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
     /// Listening: up from A5 to E6. Done: back down.
     private static let listeningChime = chime([880, 1318.5])
@@ -237,15 +240,16 @@ final class SpeechListener: ObservableObject {
         try Task.checkCancellation()
         guard hasMicrophone else { throw CocoaError(.featureUnsupported) }
 
-        if chimePlayer.engine == nil {
-            engine.attach(chimePlayer)
-            engine.connect(chimePlayer, to: engine.mainMixerNode, format: Self.chimeFormat)
-        }
+        // A fresh engine, set up for the session as it is now.
+        engine = AVAudioEngine()
+        chimePlayer = AVAudioPlayerNode()
+        engine.attach(chimePlayer)
+        engine.connect(chimePlayer, to: engine.mainMixerNode, format: Self.chimeFormat)
         // Touch the microphone before the engine starts, so it is part of it.
         _ = engine.inputNode
         // Starting switches the session on too: off the main thread, after
         // the session calls above.
-        nonisolated(unsafe) let engine = engine
+        let engine = engine
         try await AudioSessionQueue.run { _ in
             engine.prepare()
             try engine.start()
@@ -253,8 +257,15 @@ final class SpeechListener: ObservableObject {
     }
 
     private func stopAudio() {
-        chimePlayer.stop()
-        if engine.isRunning { engine.stop() }
+        // Stopping the engine waits on the audio hardware: off the main
+        // thread, so a screen sliding in at the same time doesn't stutter.
+        // The next start makes a new engine anyway.
+        let engine = engine
+        let chimePlayer = chimePlayer
+        AudioSessionQueue.perform {
+            chimePlayer.stop()
+            if engine.isRunning { engine.stop() }
+        }
         if audioIsOn {
             audioIsOn = false
             AudioSessionQueue.deactivate()
@@ -351,6 +362,11 @@ final class SpeechListener: ObservableObject {
     }
 
     private static func askPermission() async -> Bool {
+        // Given before: no need to ask the system again, which takes a moment.
+        if SFSpeechRecognizer.authorizationStatus() == .authorized,
+           AVAudioApplication.shared.recordPermission == .granted {
+            return true
+        }
         let speech = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0 == .authorized) }
         }
