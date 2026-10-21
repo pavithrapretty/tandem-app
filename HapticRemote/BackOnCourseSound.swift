@@ -35,6 +35,10 @@ final class BackOnCourseSound {
         AudioSessionQueue.deactivate()
     }
 
+    /// Played here, on the main thread, the moment it is asked for: through
+    /// the audio session's queue it could wait behind a slow session call,
+    /// and the chime has to come as the user turns. The session is already
+    /// on by then (`start`), so playing doesn't switch it on.
     func play() {
         guard let player else { return }
         player.currentTime = 0

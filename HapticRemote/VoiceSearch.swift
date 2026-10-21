@@ -223,8 +223,13 @@ final class SpeechListener: ObservableObject {
         }
         // Touch the microphone before the engine starts, so it is part of it.
         _ = engine.inputNode
-        engine.prepare()
-        try engine.start()
+        // Starting switches the session on too: off the main thread, after
+        // the session calls above.
+        nonisolated(unsafe) let engine = engine
+        try await AudioSessionQueue.run { _ in
+            engine.prepare()
+            try engine.start()
+        }
     }
 
     private func stopAudio() {

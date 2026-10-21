@@ -23,6 +23,12 @@ nonisolated enum AudioSessionQueue {
         }
     }
 
+    /// Runs `work` on the queue without waiting: for audio players and
+    /// engines, whose start can switch the session on behind the scenes.
+    static func perform(_ work: @escaping @Sendable () -> Void) {
+        queue.async(execute: work)
+    }
+
     /// Switches the session off, letting other apps' audio back up. Doesn't
     /// wait: a later `run` still comes after it.
     static func deactivate() {

@@ -76,7 +76,11 @@ final class RouteNavigator: NSObject, ObservableObject {
     enum Notice: Equatable {
         /// Still no usable GPS fix `locatingPatience` seconds after starting.
         case noLocationYet
-        /// More than the reroute distance from the route: a new route is on its way.
+        /// Not on the route yet since it came in (it starts on the nearest
+        /// street, e.g. when starting inside a building): pointed to its start.
+        case toRouteStart
+        /// Left the route by more than the reroute distance: pointed back to
+        /// where they left it, while a new route is on its way.
         case offRoute
         /// Off the route, and the new route failed (`.noConnection`,
         /// `.noWalkingRoute` or `.mapsUnavailable`). Tried again every
@@ -112,6 +116,9 @@ final class RouteNavigator: NSObject, ObservableObject {
     /// The direction to the point on the route `lookAhead` metres ahead of the
     /// user, in degrees clockwise from north: the way to walk right now.
     @Published private(set) var bearingAhead: Double?
+    /// Off the route: metres back to it (to where the user left it, or to its
+    /// start), which `bearingAhead` then points to. Nil on the route.
+    @Published private(set) var distanceBack: Double?
     /// The route's line, for drawing it on a map.
     @Published private(set) var routeLine: MKPolyline?
     /// Where the way on is, seen from the phone, as an hour on a clock face:
@@ -298,6 +305,11 @@ final class RouteNavigator: NSObject, ObservableObject {
     /// What the route alone says (turns, wrong way, almost there, arrived).
     private var routePattern: Pattern?
     private var signalIsLost = false
+    /// Off the route without the compass: the way the user walks, by the GPS,
+    /// to tell them which side the route is on.
+    private var walkingCourse: Double?
+    /// The user has been on this route (not just off it since it came in).
+    private var joinedRoute = false
     /// Which way the phone points, degrees clockwise from north.
     private var heading: Double?
     /// A direction waiting to settle before it becomes `pattern`.
@@ -612,13 +624,26 @@ final class RouteNavigator: NSObject, ObservableObject {
         if point.offset > offRoute {
             shownCoordinate = location.coordinate
             offRouteCount += 1
-            if offRouteCount >= offRouteFixes {
-                if notice == nil || notice == .noLocationYet { notice = .offRoute }
+            guard offRouteCount >= offRouteFixes else { return }
+            if joinedRoute {
+                // Left the route: back to where they left it (the nearest spot,
+                // after a recalibration), and a new route from here, which may
+                // well be shorter.
+                if notice == nil || notice == .noLocationYet || notice == .toRouteStart { notice = .offRoute }
+                pointBack(from: location, to: route.coordinate(at: lastAlong ?? point.along))
                 reroute(from: location.coordinate)
+            } else {
+                // Never on it yet: a new route from here would start on the
+                // same street, so just the way to its start.
+                if notice != .toRouteStart { notice = .toRouteStart }
+                pointBack(from: location, to: route.coordinate(at: 0))
             }
             return
         }
         offRouteCount = 0
+        distanceBack = nil
+        walkingCourse = nil
+        joinedRoute = true
         // Back on the route by walking: the old route will do.
         if notice != nil { notice = nil }
 
@@ -774,6 +799,22 @@ final class RouteNavigator: NSObject, ObservableObject {
         }
     }
 
+    /// Off the route: the signals and the dial's pointer show the way back to
+    /// `target`, as if it were the way on (Go straight when facing it, Turn
+    /// around when it is behind), so walking back is guided like the route.
+    private func pointBack(from location: CLLocation, to target: CLLocationCoordinate2D) {
+        let metres = distance(location.coordinate, target)
+        distanceBack = metres
+        if metres > 0.5 { bearingAhead = initialBearing(location.coordinate, target) }
+        if location.speed > 0.6, location.course >= 0, (0...60).contains(location.courseAccuracy) {
+            walkingCourse = location.course
+        }
+        wrongWayCount = 0
+        announcedTurn = nil
+        routePattern = .forward
+        refreshPattern()
+    }
+
     /// Within `lateralTurnBefore` before a turn or `lateralTurnAfter` after it.
     private func isNearTurn(on route: Route, at along: Double) -> Bool {
         route.turns.contains { $0.along - along < lateralTurnBefore && along - $0.along < lateralTurnAfter }
@@ -845,8 +886,9 @@ final class RouteNavigator: NSObject, ObservableObject {
             wanted = .arrived
         } else if signalIsLost {
             wanted = .signalLost
-        } else if let heading, let bearingAhead {
-            let angle = signedAngle(from: heading, to: bearingAhead)
+        } else if let facingDirection = heading ?? (distanceBack != nil ? walkingCourse : nil),
+                  let bearingAhead {
+            let angle = signedAngle(from: facingDirection, to: bearingAhead)
             setClockPosition(angle)
             let facing = facingPattern(angle)
             // Almost there only while facing the right way; otherwise the turn comes first.
@@ -932,6 +974,9 @@ final class RouteNavigator: NSObject, ObservableObject {
         wrongWayCount = 0
         offRouteCount = 0
         notice = nil
+        distanceBack = nil
+        walkingCourse = nil
+        joinedRoute = false
         if !isFirst { reroutedAt = .now }
         status = .guiding
         if isSimulated { locationManager.stopUpdatingLocation() }
@@ -1013,6 +1058,10 @@ extension RouteNavigator {
             navigator.remaining = remaining
             navigator.distanceToNext = toNext
             navigator.progress = 0.4
+            switch notice {
+            case .toRouteStart, .offRoute, .offRouteNoNewRoute: navigator.distanceBack = 40
+            default: break
+            }
         }
         return navigator
     }

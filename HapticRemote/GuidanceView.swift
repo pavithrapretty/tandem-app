@@ -112,20 +112,28 @@ private struct GuidanceStep {
 
         // No signal says more than being off the route: where the user is isn't known.
         if navigator.pattern != .signalLost, navigator.pattern != .arrived {
+            let back = wayBack(navigator, starts: navigator.notice == .toRouteStart)
             switch navigator.notice {
+            case .toRouteStart:
+                return GuidanceStep(title: "Walk to the route", detail: back.shown, remaining: remaining,
+                                    remainingSpoken: remainingSpoken, progress: progress,
+                                    voiceLine: "Walk to the route. \(back.spoken)",
+                                    explanation: "The route starts on the nearest street. The arrow points to its start, and the directions begin there.")
             case .offRoute:
-                return notice(title: "Off route", detail: "Finding a new route",
-                              explanation: "You're more than \(Int(navigator.rerouteDistance)) m from the route, so Tandem is getting a new one from here. Until it comes, the last direction keeps playing.",
-                              remaining: remaining, remainingSpoken: remainingSpoken, progress: progress)
+                return GuidanceStep(title: "Off route", detail: back.shown, remaining: remaining,
+                                    remainingSpoken: remainingSpoken, progress: progress,
+                                    voiceLine: "Off route. \(back.spoken)",
+                                    explanation: "You're more than \(Int(navigator.rerouteDistance)) m from the route. The arrow points back to where you left it while Tandem looks for a new route from here.")
             case .offRouteNoNewRoute(let problem):
                 let why = switch problem {
                 case .noConnection: "There's no internet connection, so Tandem can't get a new route."
                 case .noWalkingRoute: "Apple Maps has no walking route from here."
                 default: "Apple Maps isn't answering right now."
                 }
-                return notice(title: "Off route", detail: "Walk back to the route",
-                              explanation: "\(why) Use the map to find your way back to the route, and the directions pick up from there. Tandem keeps trying for a new route every few seconds.",
-                              remaining: remaining, remainingSpoken: remainingSpoken, progress: progress)
+                return GuidanceStep(title: "Off route", detail: back.shown, remaining: remaining,
+                                    remainingSpoken: remainingSpoken, progress: progress,
+                                    voiceLine: "Off route. \(back.spoken)",
+                                    explanation: "\(why) The arrow points back to where you left the route, and the directions pick up from there. Tandem keeps trying for a new route every few seconds.")
             case .noLocationYet, nil:
                 break
             }
@@ -169,6 +177,24 @@ private struct GuidanceStep {
                                 remainingSpoken: "nothing, you are there", progress: 1,
                                 voiceLine: "You've arrived at \(dutch: name)")
         }
+    }
+
+    /// Off the route: where it is, e.g. "The route is behind you, 40 m".
+    /// Which side only when the way the user faces is known (the compass, or
+    /// the way they walk); otherwise just how far.
+    private static func wayBack(_ navigator: RouteNavigator, starts: Bool) -> (shown: String, spoken: SpokenLine) {
+        let far = Distance(navigator.distanceBack ?? 0)
+        let subject = starts ? "The route starts" : "The route is"
+        guard navigator.clockPosition != nil, let pattern = navigator.pattern else {
+            return ("\(subject) \(far.short) away", "\(subject) \(far.spoken) away")
+        }
+        let side = switch pattern {
+        case .left: "to your left"
+        case .right: "to your right"
+        case .turnAround: "behind you"
+        default: "ahead"
+        }
+        return ("\(subject) \(side), \(far.short)", "\(subject) \(side), \(far.spoken)")
     }
 
     /// A screen with no direction on it: the title and detail are said, the
@@ -441,8 +467,8 @@ struct GuidanceView: View {
                 announce(step.voiceLine)
             } else if old != .noLocationYet, !justRerouted, navigator.status == .guiding,
                       navigator.pattern != .signalLost {
-                // Walked back onto the route.
-                announce("Back on the route. \(step.voiceLine)")
+                // Walked (back) onto the route.
+                announce("\(old == .toRouteStart ? "You're on the route" : "Back on the route"). \(step.voiceLine)")
             }
         }
         // A new route: said once its first direction has settled, with it.
@@ -540,16 +566,18 @@ struct GuidanceView: View {
         // ends 16 pt above the bottom of the screen, past the home indicator.
         // Measured inside the safe area (ignoring it would make the insets 0),
         // then laid out over the whole screen.
-        // The simulated walk: the same screen at full size, the Forward and
-        // Back controls added above the toolbar, scrolling to them.
+        // The simulations: the same screen at full size, their controls added
+        // above the toolbar, scrolling to them. The map keeps one height
+        // throughout (bigger for dragging), however much is under it.
         GeometryReader { proxy in
             let top = proxy.safeAreaInsets.top
             let bottom = proxy.safeAreaInsets.bottom
-            if simulation == .walk {
+            if isSimulated {
                 ScrollView {
                     VStack(spacing: 14) {
                         if showsMap {
-                            mapWithCard(top: top, height: top + cardGap + cardHeight + 150)
+                            mapWithCard(top: top,
+                                        height: top + cardGap + cardHeight + (simulation == .drag ? 250 : 150))
                         } else {
                             topCard
                                 .padding(.top, top + cardGap)
@@ -568,10 +596,9 @@ struct GuidanceView: View {
             } else {
                 VStack(spacing: 14) {
                     if showsMap {
-                        // After the dial, before the spacers; dragging the map to
-                        // move, the map is the control, so it comes first.
+                        // After the dial, before the spacers.
                         mapWithCard(top: top)
-                            .layoutPriority(simulation == .drag ? 2 : 0.5)
+                            .layoutPriority(0.5)
                     } else {
                         topCard
                             .padding(.top, top + cardGap)
@@ -635,26 +662,30 @@ struct GuidanceView: View {
                 }
 
                 // A new id per direction, so the text cross-fades.
-                VStack(spacing: 14) {
+                VStack(spacing: 4) {
                     // The title and its subtitle closer together, as one.
-                    VStack(spacing: 2) {
+                    VStack(spacing: 24) {
                         Text(step.title)
                             .font(.atkinson(44, .extraBold, relativeTo: .largeTitle))
                             .tracking(-0.88)
                             .foregroundStyle(Palette.text)
                             .multilineTextAlignment(.center)
+                            // A long title wraps onto a second line instead of
+                            // being cut short when the screen is tight.
+                            .fixedSize(horizontal: false, vertical: true)
                             .accessibilityAddTraits(.isHeader)
 
                         Text(step.detail)
                             .font(.atkinson(22, relativeTo: .title2))
-                            .foregroundStyle(Palette.instruction)
+                            .foregroundStyle(Palette.text)
                             .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     if let explanation = step.explanation {
                         Text(explanation)
                             .font(.atkinson(17, relativeTo: .body))
-                            .foregroundStyle(Palette.secondaryText)
+                            .foregroundStyle(Palette.secondaryText.opacity(0.8))
                             .multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 8)
@@ -719,12 +750,9 @@ struct GuidanceView: View {
         isSimulated && remotePattern == nil && navigator.status == .guiding
     }
 
-    /// The dial's size: the same with the map as without; smaller only beside
-    /// the map simulation's controls (the simulated walk scrolls instead).
-    /// Smaller too with an explanation under the text, to leave it room.
-    private var dialSize: CGFloat {
-        showsSimulationControls && simulation == .drag ? 170 : step.explanation != nil ? 200 : 280
-    }
+    /// The dial's size: the same with the map as without (the simulations
+    /// scroll instead). Smaller with an explanation under the text, to leave it room.
+    private var dialSize: CGFloat { step.explanation != nil ? 200 : 280 }
 
     /// The same dial throughout, so the pointer keeps turning smoothly when
     /// the signal changes; its colour and arrow change in place.
@@ -867,7 +895,9 @@ struct GuidanceView: View {
     /// in. Nil after the last turn (and on the watch's sample route), when the
     /// card shows the destination instead.
     private var upcomingTurn: RouteNavigator.Turn? {
-        guard remotePattern == nil, navigator.status == .guiding, pattern != .arrived else { return nil }
+        // Off the route, the turn is on the route ahead, not where the user is.
+        guard remotePattern == nil, navigator.status == .guiding, pattern != .arrived,
+              navigator.distanceBack == nil else { return nil }
         return navigator.nextTurn
     }
 
@@ -2512,6 +2542,11 @@ private struct ArrivedView: View {
 #Preview("Precise Location off") {
     Typography.registerFonts()
     return GuidanceView(previewing: .preview(.failed(.preciseLocationOff)))
+}
+
+#Preview("Walk to the route") {
+    Typography.registerFonts()
+    return GuidanceView(previewing: .preview(.guiding, notice: .toRouteStart))
 }
 
 #Preview("Off route") {
