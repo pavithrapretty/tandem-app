@@ -74,8 +74,8 @@ struct ListeningCircles: View {
 
 // MARK: - Speech
 
-/// Listens to the microphone and turns speech into text with Apple's speech
-/// recognition. Calls `onFinish` once the user has been quiet for a moment.
+/// Listens to the microphone and turns speech into text with the selected speech
+/// provider. Calls `onFinish` once the user has been quiet for a moment.
 ///
 /// Without looking at the screen: a rising two-note chime says the
 /// microphone is listening, a soft tap on every burst of speech says it hears
@@ -106,6 +106,9 @@ final class SpeechListener: ObservableObject {
     private let engine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
+    private var deepgram: DeepgramSpeech?
+    private var generation = UUID()
+    @Published private(set) var isFinalizing = false
     private var silenceTimer: Task<Void, Never>?
     /// From `start()` until the microphone is on: asking permission, the tone.
     private var startTask: Task<Void, Never>?
@@ -130,28 +133,52 @@ final class SpeechListener: ObservableObject {
 
     func start() {
         stop()
+        let generation = self.generation
+        let provider = VoiceSearchProvider.selected
         transcript = ""
         failure = nil
         startTask = Task {
-            guard await Self.askPermission() else {
-                failure = Failure(title: "Microphone is off",
-                                  detail: "Turn on Microphone and Speech Recognition for Tandem in Settings, or type instead")
-                return
-            }
-            guard let recognizer, recognizer.isAvailable else {
-                failure = Failure(title: "Voice search isn't available",
-                                  detail: "Check the internet connection, or type instead")
-                return
-            }
             do {
+                var key: String?
+                if provider == .deepgram {
+                    key = try DeepgramKeychain.read()
+                    guard let key, !key.isEmpty else {
+                        failure = Failure(title: "Deepgram needs an API key",
+                                          detail: "Add your key in Settings → Destination voice search, retry, or use Apple Speech")
+                        return
+                    }
+                }
+                let allowed = await Self.askPermission(provider: provider)
+                guard !Task.isCancelled, self.generation == generation else { return }
+                guard allowed else {
+                    failure = Failure(title: "Microphone is off",
+                                      detail: provider == .apple
+                                      ? "Turn on Microphone and Speech Recognition for Tandem in Settings, or type instead"
+                                      : "Turn on Microphone for Tandem in Settings, or type instead")
+                    return
+                }
+                if provider == .apple {
+                    guard let recognizer, recognizer.isAvailable else {
+                        failure = Failure(title: "Voice search isn't available",
+                                          detail: "Check the internet connection, or type instead")
+                        return
+                    }
+                }
                 try startAudio()
-                // The chime first, and only then the microphone, so it isn't heard as speech.
                 await play(Self.listeningChime)
-                guard !Task.isCancelled else { return }
-                try begin(with: recognizer)
+                guard !Task.isCancelled, self.generation == generation else { return }
+                if let key {
+                    try beginDeepgram(key: key, generation: generation)
+                } else if let recognizer {
+                    try begin(with: recognizer)
+                }
             } catch {
+                guard !Task.isCancelled, self.generation == generation else { return }
                 stop()
-                failure = Failure(title: "Couldn't start listening", detail: "Try again, or type instead")
+                failure = Failure(title: "Couldn't start listening",
+                                  detail: provider == .deepgram
+                                  ? "Check your API key in Settings, retry, or use Apple Speech"
+                                  : "Try again, or type instead")
             }
         }
     }
@@ -159,21 +186,34 @@ final class SpeechListener: ObservableObject {
     /// The user says they are done: finish with what was heard.
     func finishNow() {
         guard isRunning else { return }
-        let words = transcript
+        if let deepgram {
+            guard !isFinalizing else { return }
+            silenceTimer?.cancel()
+            if hasTap { engine.inputNode.removeTap(onBus: 0); hasTap = false }
+            level = 0
+            isFinalizing = true
+            deepgram.finish()
+            return
+        }
+        complete(transcript)
+    }
+
+    private func complete(_ words: String) {
         stopListening()
-        onFinish?(words)
         // The microphone is off already; the audio stays on for the chime.
         let finishing = Task { [weak self] in
             guard let self else { return }
             await self.play(Self.doneChime)
             guard !Task.isCancelled else { return }
             self.stopAudio()
+            self.onFinish?(words)
         }
         startTask = finishing
     }
 
     /// Stops listening and all sound, at once and without a chime.
     func stop() {
+        generation = UUID()
         startTask?.cancel()
         startTask = nil
         stopListening()
@@ -188,6 +228,9 @@ final class SpeechListener: ObservableObject {
             engine.inputNode.removeTap(onBus: 0)
             hasTap = false
         }
+        deepgram?.cancel()
+        deepgram = nil
+        isFinalizing = false
         request?.endAudio()
         request = nil
         task?.cancel()
@@ -267,12 +310,13 @@ final class SpeechListener: ObservableObject {
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
+        let generation = self.generation
         hasTap = true
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             request.append(buffer)
             let loudness = Self.loudness(of: buffer)
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.generation == generation, self.isRunning else { return }
                 // Up at once, down slowly: the rings swell on a word and settle after it.
                 self.level = loudness > self.level ? loudness : self.level * 0.8 + loudness * 0.2
                 self.tapForSpeech(loudness)
@@ -286,7 +330,7 @@ final class SpeechListener: ObservableObject {
             let isFinal = result?.isFinal ?? false
             let failed = error != nil
             Task { @MainActor in
-                guard let self, self.isRunning else { return }
+                guard let self, self.isRunning, self.generation == generation else { return }
                 if let text, !text.isEmpty {
                     self.transcript = text
                     self.waitForSilence(self.pauseAfterSpeech)
@@ -319,12 +363,53 @@ final class SpeechListener: ObservableObject {
         }
     }
 
-    private static func askPermission() async -> Bool {
-        let speech = await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0 == .authorized) }
+    private static func askPermission(provider: VoiceSearchProvider) async -> Bool {
+        if provider == .apple {
+            let speech = await withCheckedContinuation { continuation in
+                SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0 == .authorized) }
+            }
+            guard speech, !Task.isCancelled else { return false }
         }
-        guard speech else { return false }
         return await AVAudioApplication.requestRecordPermission()
+    }
+
+    private func beginDeepgram(key: String, generation: UUID) throws {
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        let encoder = try DeepgramAudioEncoder(input: format)
+        let stream = DeepgramSpeech(key: key)
+        deepgram = stream
+        stream.onText = { [weak self] text in
+            guard let self, self.generation == generation else { return }
+            let changed = self.transcript != text
+            self.transcript = text
+            if changed, !self.isFinalizing { self.waitForSilence(self.pauseAfterSpeech) }
+        }
+        stream.onComplete = { [weak self] words in
+            guard let self, self.generation == generation else { return }
+            self.transcript = words
+            self.complete(words)
+        }
+        stream.onError = { [weak self] detail in
+            guard let self, self.generation == generation else { return }
+            self.stop()
+            self.failure = Failure(title: "Deepgram voice search failed", detail: detail)
+        }
+        speechTap.prepare()
+        tapArmed = true
+        isRunning = true
+        stream.start(encoder: encoder)
+        hasTap = true
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            encoder.append(buffer)
+            let loudness = Self.loudness(of: buffer)
+            Task { @MainActor in
+                guard let self, self.generation == generation, self.isRunning, !self.isFinalizing else { return }
+                self.level = loudness > self.level ? loudness : self.level * 0.8 + loudness * 0.2
+                self.tapForSpeech(loudness)
+            }
+        }
+        waitForSilence(waitForSpeech)
     }
 
     /// Roughly how loud a buffer is, 0 to 1 (about -55 dB to -20 dB), so

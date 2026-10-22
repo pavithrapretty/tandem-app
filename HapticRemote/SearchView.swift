@@ -13,6 +13,7 @@
 //  The voice parts are in VoiceSearch.swift.
 //
 
+import AVFoundation
 import Combine
 import CoreLocation
 import MapKit
@@ -25,9 +26,11 @@ struct SearchView: View {
     var onPick: (Destination) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var search = PlaceSearch()
     @StateObject private var listener = SpeechListener()
+    @AppStorage(VoiceSearchProvider.settingsKey) private var speechProvider = VoiceSearchProvider.apple.rawValue
     @FocusState private var fieldFocused: Bool
     @State private var mode: Mode = .typing
     @State private var phase: VoicePhase = .listening
@@ -83,6 +86,19 @@ struct SearchView: View {
             if startsListening { listen() } else { fieldFocused = true }
         }
         .onDisappear { listener.stop() }
+        .onChange(of: scenePhase) { _, scene in
+            if scene == .background, mode == .listening {
+                listener.stop()
+                phase = .failed("Voice search stopped", "Tap Try again when you're ready, or type instead")
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { notification in
+            guard mode == .listening,
+                  let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
+            listener.stop()
+            phase = .failed("Microphone interrupted", "Tap Try again when you're ready, or type instead")
+        }
         // The words appear in the field as they are heard.
         .onChange(of: listener.transcript) { _, words in
             if mode == .listening { search.query = words }
@@ -333,7 +349,7 @@ struct SearchView: View {
                     .opacity(phase == .listening ? 1 : 0.6)
             }
             .buttonStyle(.plain)
-            .disabled(phase == .lookingUp)
+            .disabled(phase == .lookingUp || listener.isFinalizing)
             .accessibilityLabel(phase == .listening ? "Done talking" : "Listen again")
 
             VStack(spacing: 14) {
@@ -360,6 +376,20 @@ struct SearchView: View {
             }
             .frame(maxWidth: .infinity)
 
+            if case .failed = phase {
+                HStack(spacing: 20) {
+                    Button("Try again", action: listen)
+                    if speechProvider == VoiceSearchProvider.deepgram.rawValue {
+                        Button("Use Apple Speech") {
+                            speechProvider = VoiceSearchProvider.apple.rawValue
+                            listen()
+                        }
+                    }
+                }
+                .font(.atkinson(18, .bold, relativeTo: .headline))
+                .foregroundStyle(Palette.accent)
+            }
+
             Button(action: typeInstead) {
                 HStack(spacing: 10) {
                     Image("icon-keyboard")
@@ -376,7 +406,8 @@ struct SearchView: View {
     }
 
     private var voiceTitle: String {
-        switch phase {
+        if listener.isFinalizing { return "Finishing…" }
+        return switch phase {
         case .listening: "Listening…"
         case .lookingUp: "Looking it up…"
         case .failed(let title, _): title
@@ -384,7 +415,8 @@ struct SearchView: View {
     }
 
     private var voiceSubtitle: String {
-        switch phase {
+        if listener.isFinalizing { return "Waiting for the final words from Deepgram" }
+        return switch phase {
         case .listening: "Say a place, a stop or an address"
         case .lookingUp: "Finding \(search.query)"
         case .failed(_, let detail): detail

@@ -1,0 +1,15 @@
+# Local credentials; each teammate enters their Deepgram key in the app.
+.env
+.env.*
+!.env.example
+*.p8
+*.p12
+*.pem
+*.key
+*.mobileprovision
+
+# Local Xcode and editor state.
+.DS_Store
+xcuserdata/
+*.xcuserstate
+tandem-deepgram-experiment.code-workspace

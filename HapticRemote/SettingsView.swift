@@ -46,6 +46,11 @@ struct SettingsView: View {
     @AppStorage(GuidanceSettings.vibrationKey) private var vibrationOn = true
     @AppStorage(GuidanceSettings.departuresKey) private var announcesDepartures = true
 
+    @AppStorage(VoiceSearchProvider.settingsKey) private var speechProvider = VoiceSearchProvider.apple.rawValue
+    @State private var apiKey = ""
+    @State private var keyStatus = ""
+    @State private var hasAPIKey = false
+
     var body: some View {
         TutorialPage {
             Text("Settings")
@@ -56,6 +61,8 @@ struct SettingsView: View {
                 .accessibilityAddTraits(.isHeader)
 
             settingsList
+
+            voiceSearchSettings
 
             navigationSettings
 
@@ -96,6 +103,8 @@ struct SettingsView: View {
 
             Spacer(minLength: 0)
         }
+        .onAppear { refreshKeyStatus() }
+        .onDisappear { apiKey = "" }
         .fullScreenCover(item: $simulation) { simulation in
             GuidanceView(destination: .centraal, simulation: simulation,
                          connectivity: connectivity, phoneHaptics: phoneHaptics)
@@ -107,6 +116,66 @@ struct SettingsView: View {
             ToolbarItem(placement: .principal) { Color.clear }
         }
         .toolbarBackground(.hidden, for: .navigationBar)
+    }
+
+    private var voiceSearchSettings: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Destination voice search")
+                .font(.atkinson(19, .bold, relativeTo: .headline))
+                .accessibilityAddTraits(.isHeader)
+            Picker("Speech provider", selection: $speechProvider) {
+                ForEach(VoiceSearchProvider.allCases) { provider in
+                    Text(provider.title).tag(provider.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            Text("Apple Speech is the default. Deepgram streams microphone audio to Deepgram while you search and requires internet. Typed search is always available.")
+                .font(.atkinson(16, relativeTo: .callout))
+                .foregroundStyle(Palette.secondaryText)
+            if speechProvider == VoiceSearchProvider.deepgram.rawValue {
+                SecureField(hasAPIKey ? "Replace Deepgram API key" : "Deepgram API key", text: $apiKey)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textContentType(.password)
+                    .accessibilityLabel("Deepgram API key")
+                HStack(spacing: 20) {
+                    Button("Save key") {
+                        do {
+                            try DeepgramKeychain.save(apiKey)
+                            apiKey = ""
+                            refreshKeyStatus()
+                        } catch { keyStatus = error.localizedDescription }
+                    }
+                    .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Delete key") {
+                        do {
+                            try DeepgramKeychain.delete()
+                            apiKey = ""
+                            refreshKeyStatus()
+                        } catch { keyStatus = error.localizedDescription }
+                    }
+                    .disabled(!hasAPIKey)
+                }
+                .foregroundStyle(Palette.accent)
+                Text(keyStatus)
+                    .font(.atkinson(16, relativeTo: .callout))
+                    .foregroundStyle(Palette.secondaryText)
+                Text("Stored only in this iPhone’s Keychain. The saved key is never displayed. Streaming uses English for this experiment.")
+                    .font(.atkinson(16, relativeTo: .callout))
+                    .foregroundStyle(Palette.secondaryText)
+            }
+        }
+        .foregroundStyle(Palette.text)
+        .padding(18)
+        .background(Palette.card, in: RoundedRectangle(cornerRadius: 24))
+        .onChange(of: speechProvider) { _, _ in apiKey = "" }
+    }
+
+    private func refreshKeyStatus() {
+        do {
+            hasAPIKey = try DeepgramKeychain.read() != nil
+            keyStatus = hasAPIKey ? "API key saved in Keychain." : "No API key saved."
+        } catch { keyStatus = error.localizedDescription }
     }
 
     private func simulationButton(_ mode: RouteNavigator.Simulation, title: String,
